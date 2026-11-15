@@ -100,7 +100,13 @@ pan-r2/
 - 口令用 **PBKDF2-SHA256 / 10 万次**哈希存 D1，不存明文。
 - 登录签发 **HS256 JWT** 放 HttpOnly Cookie，12h 过期。
 - 账号 Access Key 用 **AES-GCM** 加密存 D1，主密钥 `MASTER_KEY` 只在 Worker secret 里。
-- 建议再加：登录失败限流（KV 计数）。
+- **登录失败限流**（`src/ratelimit.ts`）：KV 双层桶，账号桶 `login:u:<sha1(username)>` + IP 桶 `login:ip:<sha1(ip)>`，累计 **5 次**失败锁 **10 分钟**（固定窗口 `MAX_FAILS=5` / `WINDOW_SEC=600`）。任一桶超限 → `429`，连正确密码也进不去；登录成功清账号桶、保留 IP 桶（防止已登录的人拿 IP 去刷别人的账号）。改密码接口的「旧密码」也记同一个桶，回 403 时带剩余次数。
+  手工解锁：删 KV 里这两把 key 即可 ——
+  ```bash
+  curl -X DELETE -H "Authorization: Bearer $CF_TOKEN" \
+    "https://api.cloudflare.com/client/v4/accounts/$ACC/storage/kv/namespaces/$KV/values/login%3Au%3A<sha1>"
+  ```
+  （`login:u:` 后面是用户名小写后的 SHA-1；`admin` → `d033e22ae348aeb5660fc2140aec35850c4da997`。）
 - **分享链接**：`src/share.ts` 用 HMAC-SHA256 签 `token=base64url(claims).base64url(sig)`，claims 含 `{f,e,j,d?}`；`/s/:token` 免登录下载页，`?dl=1` 才真正出文件。记录放 KV `share:<jti>`，可撤销 / 限下载次数 / 到期自动清除。
 - **务必**：`JWT_SECRET` / `MASTER_KEY` 用 `wrangler secret put`，不要写进 `wrangler.toml` 或仓库。
 

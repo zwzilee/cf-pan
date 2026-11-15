@@ -6,6 +6,7 @@ import * as store from './store';
 import * as s3 from './s3';
 import { completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, streamDownload } from './chunk';
 import { checkShareUsable, createShareToken, revokeShare, verifyShareToken } from './share';
+import { checkLoginAllowed, clearLoginFailures, clientIp, MAX_FAILS, recordLoginFailure } from './ratelimit';
 
 const SESSION_TTL = 60 * 60 * 12; // 12h
 
@@ -101,9 +102,24 @@ async function login(req: Request, env: Env): Promise<Response> {
   const b = (await req.json().catch(() => ({}))) as any;
   const username = String(b.username || '');
   const password = String(b.password || '');
+  const ip = clientIp(req);
   await ensureBootstrap(env);
+
+  // 限流：任意一层（账号 / IP）累计 5 次失败 → 锁 10 分钟
+  const gate = await checkLoginAllowed(env, username, ip);
+  if (gate.locked) {
+    const mins = Math.ceil(gate.retryAfter / 60);
+    throw new HttpError(429, `密码错误次数过多，${mins} 分钟后再试`);
+  }
+
   const user = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first<any>();
-  if (!user || !(await verifyPassword(password, user.pass_hash))) throw new HttpError(401, '用户名或密码错误');
+  if (!user || !(await verifyPassword(password, user.pass_hash))) {
+    const { left, ipLeft } = await recordLoginFailure(env, username, ip);
+    const rest = Math.min(left, ipLeft);
+    throw new HttpError(401, rest > 0 ? `用户名或密码错误，还可试 ${rest} 次` : '用户名或密码错误，已锁定 10 分钟');
+  }
+
+  await clearLoginFailures(env, username);
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL;
   const token = await signJWT({ uid: user.id, role: user.role, exp }, env.JWT_SECRET);
   return json({ ok: true, role: user.role }, { headers: { 'Set-Cookie': cookie('sid', token, SESSION_TTL) } });
@@ -118,9 +134,16 @@ async function changePassword(req: Request, env: Env): Promise<Response> {
   if (!newPw || newPw.length < 8) throw new HttpError(400, '新密码至少 8 位');
   if (!oldPw) throw new HttpError(400, '要填旧密码');
 
+  const gate = await checkLoginAllowed(env, me.username || '', clientIp(req));
+  if (gate.locked) throw new HttpError(429, `试错次数过多，${Math.ceil(gate.retryAfter / 60)} 分钟后再试`);
+
   const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(me.uid).first<any>();
   if (!user) throw new HttpError(401, '会话用户不存在');
-  if (!(await verifyPassword(oldPw, user.pass_hash))) throw new HttpError(403, '旧密码不对');
+  if (!(await verifyPassword(oldPw, user.pass_hash))) {
+    const ip = clientIp(req);
+    const { left } = await recordLoginFailure(env, user.username, ip);
+    throw new HttpError(403, left > 0 ? `旧密码不对，还可试 ${left} 次` : '旧密码错误次数过多，已锁定 10 分钟');
+  }
 
   const hash = await hashPassword(newPw);
   await env.DB.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').bind(hash, me.uid).run();
