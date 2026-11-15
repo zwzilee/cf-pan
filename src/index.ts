@@ -570,9 +570,9 @@ async function stats(req: Request, env: Env): Promise<Response> {
     'SELECT COUNT(*) AS n, COALESCE(SUM(capacity_bytes),0) AS cap, COALESCE(SUM(used_bytes),0) AS used FROM accounts WHERE enabled = 1',
   ).first<any>();
   const files = await env.DB.prepare(
-    "SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS size FROM files WHERE status = 'ready'",
+    "SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS size FROM files WHERE status = 'ready' AND deleted_at IS NULL",
   ).first<any>();
-  const folders = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders').first<any>();
+  const folders = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE deleted_at IS NULL').first<any>();
   const blobs = await env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS size FROM blobs').first<any>();
   return json({
     accounts: acc.n,
@@ -590,16 +590,16 @@ async function stats(req: Request, env: Env): Promise<Response> {
 // ============ 目录 ============
 async function listFolders(req: Request, env: Env): Promise<Response> {
   await requireAny(req, env);
-  const { results } = await env.DB.prepare('SELECT id, parent_id, name, created_at FROM folders ORDER BY name').all();
+  const { results } = await env.DB.prepare('SELECT id, parent_id, name, created_at FROM folders WHERE deleted_at IS NULL ORDER BY name').all();
   return json({ folders: results });
 }
 
 /** 一次给整个目录树 + 每层文件数/大小，前台靠它渲染侧栏 */
 async function treeHandler(req: Request, env: Env): Promise<Response> {
   await requireAny(req, env);
-  const { results: folders } = await env.DB.prepare('SELECT id, parent_id, name, enc_salt FROM folders ORDER BY name').all<any>();
+  const { results: folders } = await env.DB.prepare('SELECT id, parent_id, name, enc_salt FROM folders WHERE deleted_at IS NULL ORDER BY name').all<any>();
   const { results: agg } = await env.DB.prepare(
-    "SELECT folder_id, COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes FROM files WHERE status = 'ready' GROUP BY folder_id",
+    "SELECT folder_id, COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes FROM files WHERE status = 'ready' AND deleted_at IS NULL GROUP BY folder_id",
   ).all<any>();
   const byFolder = new Map<number | null, { n: number; bytes: number }>();
   for (const a of agg) byFolder.set(a.folder_id, { n: a.n, bytes: a.bytes });
@@ -668,22 +668,9 @@ async function deleteFolder(req: Request, env: Env, id: number): Promise<Respons
     for (const r of sub.results || []) queue.push(Number(r.id));
   }
 
-  // 逐个删文件（走引用计数，配额和 blobs 一起退）
-  let files = 0;
-  let blobsDeleted = 0;
-  for (const fid of ids) {
-    const rows = await env.DB.prepare('SELECT id FROM files WHERE folder_id = ?').bind(fid).all<any>();
-    for (const f of rows.results || []) {
-      const r = await deleteFileDeep(env, String(f.id));
-      files += 1;
-      blobsDeleted += r.blobsDeleted;
-    }
-  }
-
-  for (let i = ids.length - 1; i >= 0; i--) {
-    await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(ids[i]).run();
-  }
-  return json({ ok: true, folders: ids.length, files, blobsDeleted });
+  // 进回收站（可还原）；真删走 /api/trash/purge
+  const r = await softDeleteFolder(env, Number(id));
+  return json({ ok: true, folders: r.folders, files: r.files, trashed: true });
 }
 
 // ============ 文件 ============
@@ -802,6 +789,8 @@ async function createShareHandler(req: Request, env: Env, fileId: string): Promi
   const maxDownloads = b.maxDownloads ? Number(b.maxDownloads) : undefined;
   const code = b.code ? String(b.code).trim().slice(0, 16) : undefined;
 
+  const che = await env.DB.prepare('SELECT enc FROM files WHERE id = ?').bind(fileId).first<any>();
+  if (che && che.enc) throw new HttpError(400, '加密文件不能分享（对方拿到的是密文）');
   const { token, jti, exp } = await createShareToken(env, fileId, ttlSec, maxDownloads, {
     code,
     dailyMax: b.dailyMax ? Number(b.dailyMax) : 0,
@@ -871,7 +860,7 @@ async function publicInfo(req: Request, env: Env): Promise<Response> {
   const code = u.searchParams.get('code');
   const claims = await verifyShareToken(env, token);
   const rec = await checkShareUsable(env, claims, false, 0, code);
-  const f = await env.DB.prepare("SELECT name, size, created_at FROM files WHERE id = ? AND status = 'ready'")
+  const f = await env.DB.prepare("SELECT name, size, created_at FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL")
     .bind(claims.f)
     .first<any>();
   if (!f) throw new HttpError(404, '文件已被删除');
@@ -898,7 +887,7 @@ async function publicShare(req: Request, env: Env, token: string, action?: strin
       return new Response(codePage(token, !!qcode), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
     const rec = await checkShareUsable(env, claims, false, 0, qcode);
-    const f = await env.DB.prepare("SELECT name, size FROM files WHERE id = ? AND status = 'ready'")
+    const f = await env.DB.prepare("SELECT name, size FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL")
       .bind(claims.f)
       .first<any>();
     if (!f) throw new HttpError(404, '文件已被删除');
@@ -907,9 +896,12 @@ async function publicShare(req: Request, env: Env, token: string, action?: strin
     return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
 
-  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(claims.f).first<any>();
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").bind(claims.f).first<any>();
   if (!file) throw new HttpError(404, '文件已被删除');
-  const rec = await checkShareUsable(env, claims, true, Number(file.size || 0), qcode);
+  if (file.enc) throw new HttpError(400, '加密文件不能分享（对方拿到的是密文）');
+  // 只有「第一次整份请求」才算一次下载：Range 拖进度条、断点续拉不重复计数
+  const isRange = !!req.headers.get('Range');
+  const rec = await checkShareUsable(env, claims, !isRange, Number(file.size || 0), qcode);
   if (rec.max > 0 && rec.used > rec.max) throw new HttpError(410, '分享链接下载次数已用完');
   return await serveFile(req, env, file);
 }
@@ -1031,6 +1023,7 @@ async function previewPrefix(req: Request, env: Env, id: string): Promise<Respon
   await requireAny(req, env);
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
+  if (file.enc) throw new HttpError(400, '加密文件没有预览（密文解不开）');
   const cap = 256 * 1024 * 1024;
   const end = Math.min(Number(file.size) - 1, cap - 1);
   const stream = await streamDownload(env, String(file.id), 0, end);

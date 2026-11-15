@@ -344,6 +344,7 @@ export async function zipHandler(req: Request, env: any): Promise<Response> {
   for (const id of ids) {
     const f: any = await env.DB.prepare("SELECT * FROM files WHERE id=? AND status='ready' AND deleted_at IS NULL").bind(id).first();
     if (!f) continue;
+    if (f.enc) throw new HttpError(400, '加密文件不能打包下载（拿到的是密文）');
     total += Number(f.size);
     if (total > ZIP_MAX_TOTAL) throw new HttpError(413, `打包内容超过 ${ZIP_MAX_TOTAL / 1048576}MB 上限，分几次下载吧`);
     files.push(f);
@@ -478,6 +479,7 @@ export async function unzipHandler(req: Request, env: any, fileId: string): Prom
   const me = await requireAdmin(req, env);
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(fileId).first();
   if (!file) throw new HttpError(404, '文件不存在');
+  if (file.enc) throw new HttpError(400, '加密文件不能在线解压（服务器拿到的是密文）');
   if (!/\.zip$/i.test(file.name)) throw new HttpError(400, '只支持 .zip');
   const b = (await req.json().catch(() => ({}))) as any;
   const parent = file.folder_id ?? null;
@@ -540,8 +542,13 @@ export async function unzipHandler(req: Request, env: any, fileId: string): Prom
 
     const dir = rawName.includes('/') ? await ensureDir(rawName.slice(0, rawName.lastIndexOf('/'))) : parent;
     const base = rawName.slice(rawName.lastIndexOf('/') + 1);
+    // 注意：initUpload 会把 chunkSize 夹到 [5MB, 100MB]，所以大于 5MB 的条目要按 up.chunkSize 切片
     const up: any = await initUpload(env, { name: base, size: data.byteLength, folderId: dir, chunkSize: data.byteLength || 1 });
-    await putChunk(env, up.uploadId, 0, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+    for (let i = 0; i < up.chunksCount; i++) {
+      const s0 = i * up.chunkSize;
+      const s1 = Math.min(data.byteLength, s0 + up.chunkSize);
+      await putChunk(env, up.uploadId, i, data.buffer.slice(data.byteOffset + s0, data.byteOffset + s1) as ArrayBuffer);
+    }
     await completeUpload(env, up.uploadId);
     files++;
     if (names.length < 20) names.push(rawName);

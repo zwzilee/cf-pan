@@ -919,15 +919,15 @@ async function renameFolder(id, old) {
   go('files');
 }
 async function delFolder(id) {
-  if (!(await confirmDlg('删除目录', '会连同里面所有文件、子目录一起删掉，无法恢复。'))) return;
+  if (!(await confirmDlg('移入回收站', '会连同里面所有文件、子目录一起放进回收站，可以还原。'))) return;
   try {
     const r = await api(`/api/folders/${id}`, { method: 'DELETE' });
-    toast(`已删除：${r.files || 0} 个文件、${r.folders || 1} 个目录`, 'ok');
+    toast(`已移入回收站：${r.files || 0} 个文件、${r.folders || 1} 个目录`, 'ok');
     go('files');
   } catch (e) { toast(e.message, 'err'); }
 }
 async function delFile(id) {
-  if (!(await confirmDlg('删除文件', '会同时清掉它在各个账号上的所有分片，无法恢复。'))) return;
+  if (!(await confirmDlg('移入回收站', '文件会放进回收站，可以还原；彻底删除请到回收站里操作。'))) return;
   try { await api(`/api/files/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
   catch (e) { toast(e.message, 'err'); }
 }
@@ -1142,9 +1142,10 @@ async function encKeyFor(salt, folderId) {
 /* 上传一个文件：支持加密目录 + 断点续传（分片进度记在 localStorage） */
 async function uploadOne(file, onProgress, resume) {
   let chunkSize = resume ? resume.chunkSize : chooseChunk(file.size);
-  const salt = folderSalt();
+  const folderId = resume ? (resume.folderId ?? null) : state.folder;
+  const salt = resume ? (resume.salt || null) : folderSalt();
   let key = null;
-  if (salt) key = await encKeyFor(salt, state.folder);
+  if (salt) key = await encKeyFor(salt, folderId);
 
   const chunks = Math.max(1, Math.ceil(file.size / chunkSize));
   const declaredSize = salt ? file.size + 16 * chunks : file.size;
@@ -1155,12 +1156,12 @@ async function uploadOne(file, onProgress, resume) {
     const r = await api('/api/upload/init', {
       method: 'POST',
       body: JSON.stringify({
-        name: file.name, size: declaredSize, folderId: state.folder, chunkSize,
+        name: file.name, size: declaredSize, folderId, chunkSize,
         enc: salt ? 1 : 0, encMeta: salt ? JSON.stringify({ salt, v: 1, chunks }) : null,
       }),
     });
     uploadId = r.uploadId; chunksCount = r.chunksCount;
-    qPut({ uploadId, name: file.name, size: file.size, folderId: state.folder, chunkSize, chunksCount, done: [] });
+    qPut({ uploadId, name: file.name, size: file.size, folderId: state.folder, chunkSize, chunksCount, salt: salt || null, done: [] });
   }
 
   let saved = 0;

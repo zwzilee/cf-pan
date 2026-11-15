@@ -762,7 +762,7 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 ### 回收站
 
-删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
+删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。**目录删除也走软删**（整棵子树一起进回收站，能还原）。回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。统计、目录树、WebDAV 列表都只看 `deleted_at IS NULL` 的部分。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
 
 ### 缩略图与相册
 
@@ -804,7 +804,7 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 | `dayMax` / `dayUsed` | 每天最多下载几次（跨天自动清零，`dayKey` 记日期） |
 | `byteMax` / `dayBytes` | 每天最多下多少字节（按文件大小预扣） |
 
-超限分别返回 429「今天的下载次数用完了」/「今天的流量用完了」。撤销 = `DELETE /api/shares/:jti` 删 KV 键，链接立刻 404。老的长签名链接（`base64url.签名`）仍然兼容。
+超限分别返回 429「今天的下载次数用完了」/「今天的流量用完了」。**只有整份下载（无 `Range` 头）才计一次**，视频拖进度条、断点续拉不重复扣次数。撤销 = `DELETE /api/shares/:jti` 删 KV 键，链接立刻 404。老的长签名链接（`base64url.签名`）仍然兼容。
 
 ### 上传队列 / 断点续传
 
@@ -818,7 +818,7 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 - 上传：`PBKDF2-SHA256(口令, 盐, 150000 次)` → AES-GCM-256 密钥；每片单独加密，IV = `SHA-256(盐 + ':' + 分片序号)` 前 12 字节（确定性，服务端无法重排）。密文大小 = 明文 + 16 字节认证标签，所以 `init` 时报 `size + 16 * chunks`，`enc_meta` 存 `{salt, v:1, chunks}`。
 - 下载：文件行显示 🔒，按钮变「解密下载」——整份拉下来按片解密，再另存到本地。
-- 服务端拿到的是密文分片，去重与配额都按密文算；口令丢了文件就打不开，这是设计使然。**加密目录不做缩略图、不参与分享预览。**
+- 服务端拿到的是密文分片，去重与配额都按密文算；口令丢了文件就打不开，这是设计使然。**加密目录不做缩略图；加密文件不能分享、不能在线解压、不能打包下载、没有预览**（这些出口给出去的都是密文，解不开），只有浏览器里输口令「解密下载」。
 
 > 注意：这是「网盘看不到内容」级别的加密，不是抗审查：盐与文件大小、分片数仍然可见。
 
@@ -904,7 +904,7 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST/PATCH/DELETE | `/api/folders[/:id]` | 新建 / 改名 / 删除（**递归**：连同子目录、文件一起删，返回 `{folders,files,blobsDeleted}`） |
+| POST/PATCH/DELETE | `/api/folders[/:id]` | 新建 / 改名 / 删除（**递归移入回收站**：子目录与文件一起标记 `deleted_at`，可还原；返回 `{folders,files,trashed:true}`） |
 | POST | `/api/upload/init` | 开上传会话 |
 | PUT | `/api/upload/:id/chunk/:idx` | 传一片 |
 | POST | `/api/upload/:id/complete` | 收尾成文件 |

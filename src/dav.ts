@@ -224,8 +224,8 @@ async function resolveNode(env: Env, mount: DavMount, segsIn: string[]): Promise
     const last = i === segs.length - 1;
     const folder = await env.DB.prepare(
       curId === null
-        ? 'SELECT id, name, created_at FROM folders WHERE parent_id IS NULL AND name = ? ORDER BY id LIMIT 1'
-        : 'SELECT id, name, created_at FROM folders WHERE parent_id = ? AND name = ? ORDER BY id LIMIT 1',
+        ? 'SELECT id, name, created_at FROM folders WHERE parent_id IS NULL AND deleted_at IS NULL AND name = ? ORDER BY id LIMIT 1'
+        : 'SELECT id, name, created_at FROM folders WHERE parent_id = ? AND deleted_at IS NULL AND name = ? ORDER BY id LIMIT 1',
     )
       .bind(...(curId === null ? [name] : [curId, name]))
       .first<any>();
@@ -238,8 +238,8 @@ async function resolveNode(env: Env, mount: DavMount, segsIn: string[]): Promise
     // 文件只能出现在最后一段
     const file = await env.DB.prepare(
       curId === null
-        ? "SELECT id, name, size, chunk_size, chunks_count, folder_id, created_at FROM files WHERE status='ready' AND folder_id IS NULL AND name = ? ORDER BY created_at DESC LIMIT 1"
-        : "SELECT id, name, size, chunk_size, chunks_count, folder_id, created_at FROM files WHERE status='ready' AND folder_id = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
+        ? "SELECT id, name, size, chunk_size, chunks_count, folder_id, created_at FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id IS NULL AND name = ? ORDER BY created_at DESC LIMIT 1"
+        : "SELECT id, name, size, chunk_size, chunks_count, folder_id, created_at FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
     )
       .bind(...(curId === null ? [name] : [curId, name]))
       .first<any>();
@@ -252,15 +252,15 @@ async function resolveNode(env: Env, mount: DavMount, segsIn: string[]): Promise
 async function childrenOf(env: Env, folderId: number | null) {
   const folders = await env.DB.prepare(
     folderId === null
-      ? 'SELECT id, name, created_at FROM folders WHERE parent_id IS NULL ORDER BY name'
-      : 'SELECT id, name, created_at FROM folders WHERE parent_id = ? ORDER BY name',
+      ? 'SELECT id, name, created_at FROM folders WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name'
+      : 'SELECT id, name, created_at FROM folders WHERE parent_id = ? AND deleted_at IS NULL ORDER BY name',
   )
     .bind(...(folderId === null ? [] : [folderId]))
     .all<any>();
   const files = await env.DB.prepare(
     folderId === null
-      ? "SELECT id, name, size, created_at FROM files WHERE status='ready' AND folder_id IS NULL ORDER BY name"
-      : "SELECT id, name, size, created_at FROM files WHERE status='ready' AND folder_id = ? ORDER BY name",
+      ? "SELECT id, name, size, created_at FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id IS NULL ORDER BY name"
+      : "SELECT id, name, size, created_at FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id = ? ORDER BY name",
   )
     .bind(...(folderId === null ? [] : [folderId]))
     .all<any>();
@@ -344,15 +344,15 @@ async function serveNode(env: Env, req: Request, file: any, headOnly: boolean): 
 async function findChildByName(env: Env, folderId: number | null, name: string) {
   const file = await env.DB.prepare(
     folderId === null
-      ? "SELECT id FROM files WHERE status='ready' AND folder_id IS NULL AND name = ?"
-      : "SELECT id FROM files WHERE status='ready' AND folder_id = ? AND name = ?",
+      ? "SELECT id FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id IS NULL AND name = ?"
+      : "SELECT id FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id = ? AND name = ?",
   )
     .bind(...(folderId === null ? [name] : [folderId, name]))
     .first<any>();
   const folder = await env.DB.prepare(
     folderId === null
-      ? 'SELECT id FROM folders WHERE parent_id IS NULL AND name = ?'
-      : 'SELECT id FROM folders WHERE parent_id = ? AND name = ?',
+      ? 'SELECT id FROM folders WHERE parent_id IS NULL AND deleted_at IS NULL AND name = ?'
+      : 'SELECT id FROM folders WHERE parent_id = ? AND deleted_at IS NULL AND name = ?',
   )
     .bind(...(folderId === null ? [name] : [folderId, name]))
     .first<any>();
@@ -557,8 +557,8 @@ async function davDelete(env: Env, mount: DavMount, segs: string[]): Promise<Res
   }
   // 目录：必须空
   const id = node.id as number;
-  const files = await env.DB.prepare('SELECT COUNT(*) AS n FROM files WHERE folder_id = ?').bind(id).first<any>();
-  const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ?').bind(id).first<any>();
+  const files = await env.DB.prepare('SELECT COUNT(*) AS n FROM files WHERE folder_id = ? AND deleted_at IS NULL').bind(id).first<any>();
+  const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ? AND deleted_at IS NULL').bind(id).first<any>();
   if ((files?.n ?? 0) > 0 || (subs?.n ?? 0) > 0) return new Response('目录不是空的', { status: 409 });
   await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(id).run();
   return new Response(null, { status: 204 });
@@ -598,7 +598,7 @@ async function davMove(req: Request, env: Env, mount: DavMount, segs: string[]):
     else {
       const id = exist.folderId as number;
       const n = await env.DB.prepare(
-        'SELECT (SELECT COUNT(*) FROM files WHERE folder_id=?) + (SELECT COUNT(*) FROM folders WHERE parent_id=?) AS n',
+        'SELECT (SELECT COUNT(*) FROM files WHERE folder_id=? AND deleted_at IS NULL) + (SELECT COUNT(*) FROM folders WHERE parent_id=? AND deleted_at IS NULL) AS n',
       )
         .bind(id, id)
         .first<any>();
