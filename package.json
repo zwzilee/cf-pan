@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "render:config": "node scripts/render-config.mjs",
+    "deploy:env": "node scripts/render-config.mjs && wrangler deploy --config .wrangler-deploy.toml",
     "typecheck": "tsc --noEmit",
     "db:init": "wrangler d1 execute pan_r2 --file=schema.sql --remote",
     "db:init:local": "wrangler d1 execute pan_r2 --file=schema.sql --local"

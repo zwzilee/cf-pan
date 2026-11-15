@@ -144,6 +144,46 @@ curl -X POST https://<你的域名>/api/accounts \
 
 加够账号后，前端顶部就会显示 `N 账号 / 总容量`，和截图一样的观感。
 
+### 能不能用 CF 环境变量改掉 `REPLACE_WITH_D1_ID` / `REPLACE_WITH_KV_ID` / `BOOTSTRAP_ADMIN`？
+
+分两类，答案不一样：
+
+| 配置 | 能不能走环境变量 | 原因 |
+|---|---|---|
+| `database_id` / `kv id` | **不能** | 这是**部署期绑定**（binding），`wrangler deploy` 时写进 Worker 配置。控制台的 Variables 只能塞运行时 `env`，改不了绑定。id 也不该当密钥藏，它本来就是配置。 |
+| `BOOTSTRAP_ADMIN` / `PUBLIC_APP_NAME` | **能** | `[vars]` 就是运行时 `env`，三种途径都行：`wrangler.toml`、控制台 Settings → Variables and Secrets、`wrangler secret put BOOTSTRAP_ADMIN`（推荐，不进仓库） |
+
+所以给了一个渲染脚本，把 id 从环境变量注进配置再部署，避免手改 toml：
+
+```bash
+# D1 / KV 的 id 从环境变量来
+export D1_DATABASE_ID=<wrangler d1 create 返回的 uuid>
+export KV_NAMESPACE_ID=<wrangler kv namespace create 返回的 id>
+export BOOTSTRAP_ADMIN='admin:换成你的密码'   # 可选，不传就沿用 toml 里的
+
+npm run deploy:env
+# 等价于：node scripts/render-config.mjs && wrangler deploy --config .wrangler-deploy.toml
+```
+
+`scripts/render-config.mjs` 会：读 `wrangler.toml` → 替换 id 和 vars → 二次校验没有残留 `REPLACE_WITH_` → 写 `.wrangler-deploy.toml`（已在 `.gitignore`，不会进仓库）。
+
+CI 里就三行：
+
+```yaml
+- run: npm ci
+- run: npx wrangler d1 execute pan_r2 --file=schema.sql --remote
+  env: { CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}, CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }} }
+- run: npm run deploy:env
+  env:
+    CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+    D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+    KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
+    BOOTSTRAP_ADMIN: ${{ secrets.BOOTSTRAP_ADMIN }}
+```
+
+> `BOOTSTRAP_ADMIN` 只在 `users` 表为空时生效（`ensureBootstrap` 先查 `COUNT(*)`），建过管理员后再留着也无害；但**建完建议删掉**，改密码走后台。密钥类的 `JWT_SECRET` / `MASTER_KEY` 一律 `wrangler secret put`，永远别写进 toml。
+
 ---
 
 ## 八、本地开发

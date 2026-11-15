@@ -2,6 +2,7 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
+.wrangler-deploy.toml
 *.log
 .DS_Store
 Thumbs.db
