@@ -3,465 +3,1101 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PAN R2</title>
+<title>PAN R2 · 聚合网盘</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%97%82%3C/text%3E%3C/svg%3E" />
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --line:#2b333d; --fg:#e6edf3; --mut:#8b949e; --acc:#2ea043; --warn:#d29922; --err:#f85149; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg); }
-  header { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:16px; margin:0; }
-  nav { display:flex; gap:4px; }
-  nav button { background:transparent; border:0; color:var(--mut); padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; }
-  nav button.on { background:#1f2731; color:var(--fg); }
-  .spacer { flex:1; }
-  .btn { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font-size:13px; }
-  .btn:disabled { opacity:.5; cursor:not-allowed; }
-  .btn.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
-  .btn.mini { padding:4px 9px; font-size:12px; }
-  .btn.danger { background:transparent; border:1px solid #5a2a2a; color:var(--err); }
-  main { padding:20px; max-width:1000px; margin:0 auto; }
-  .bar { display:flex; align-items:center; gap:12px; color:var(--mut); font-size:12px; margin-bottom:16px; flex-wrap:wrap; }
-  .bar b { color:var(--fg); }
-  .meter { flex:1; min-width:120px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
-  .meter i { display:block; height:100%; background:var(--acc); }
-  table { width:100%; border-collapse:collapse; }
-  td,th { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); font-size:13px; vertical-align:middle; }
-  th { color:var(--mut); font-weight:500; }
-  tr:hover td { background:#1b222c; }
-  a { color:#58a6ff; text-decoration:none; }
-  .login { max-width:340px; margin:14vh auto; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:26px; }
-  .login h2 { margin:0 0 18px; font-size:18px; }
-  input, select { padding:9px 11px; background:#0d1117; border:1px solid var(--line); border-radius:6px; color:var(--fg); font-size:13px; width:100%; }
-  .login input { margin-bottom:12px; }
-  .err { color:var(--err); font-size:12px; min-height:18px; }
-  .drop { border:1px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--mut); margin-bottom:16px; cursor:pointer; }
-  .drop.hot { border-color:var(--acc); color:var(--fg); }
-  .prog { font-size:12px; color:var(--mut); margin-bottom:10px; white-space:pre-line; }
-  .hidden { display:none !important; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-  .card h3 { margin:0 0 12px; font-size:13px; color:var(--mut); font-weight:500; }
-  .tag { display:inline-block; padding:1px 7px; border-radius:20px; font-size:11px; }
-  .tag.ok { background:#12341c; color:#3fb950; }
-  .tag.off { background:#2b333d; color:var(--mut); }
-  .tag.warn { background:#3a2d0f; color:var(--warn); }
-  .row { display:flex; gap:8px; align-items:center; }
-  .row > * { min-width:0; }
-  .sharebox { display:flex; gap:8px; margin-top:10px; }
-  .sharebox input { font-family:ui-monospace,monospace; font-size:12px; }
-  @media (max-width:640px){ .grid { grid-template-columns:1fr; } }
+:root{
+  --bg:#0a0d13; --bg2:#0e1219; --card:#121826; --card2:#161e2e; --line:#212b3d; --line2:#2b364c;
+  --fg:#e9eefa; --mut:#8a97ad; --mut2:#5f6b80;
+  --acc:#4f8cff; --acc2:#6ea1ff; --ok:#2ec27e; --warn:#f5a524; --err:#f2555a; --purple:#a273ff;
+  --r:14px; --shadow:0 20px 50px -24px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+a{color:var(--acc);text-decoration:none}
+button,input,select,textarea{font:inherit;color:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#263145;border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#33415c}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- 通用控件 ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line2);background:var(--card2);
+  color:var(--fg);padding:8px 14px;border-radius:9px;cursor:pointer;font-size:13px;transition:.15s;white-space:nowrap}
+.btn:hover{background:#1c2740;border-color:#38466a}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:linear-gradient(180deg,var(--acc2),var(--acc));border-color:transparent;color:#fff;font-weight:600;
+  box-shadow:0 10px 24px -12px var(--acc)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent}
+.btn.danger{color:#ffb4b6;border-color:#4a2a2e;background:#221519}
+.btn.danger:hover{background:#2e1a1f}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.input{width:100%;background:#0c111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13px;outline:none;transition:.15s}
+.input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(79,140,255,.15)}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
+.row{display:flex;gap:10px;align-items:center}
+.row.wrap{flex-wrap:wrap}
+.spacer{flex:1}
+.mut{color:var(--mut);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:99px;
+  border:1px solid var(--line2);color:var(--mut)}
+.pill.ok{color:#7ee2b0;border-color:#1f4a38;background:#0f2419}
+.pill.warn{color:#ffcf7a;border-color:#4d3a12;background:#241c0b}
+.pill.err{color:#ffb0b3;border-color:#4a2326;background:#241214}
+.pill.acc{color:#a8c8ff;border-color:#1f3357;background:#0f1a2e}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
+.hide{display:none !important}
+.empty{padding:56px 20px;text-align:center;color:var(--mut2)}
+.empty .big{font-size:38px;margin-bottom:10px;opacity:.5}
+.toast-wrap{position:fixed;top:18px;right:18px;display:flex;flex-direction:column;gap:8px;z-index:9999}
+.toast{background:#182136;border:1px solid var(--line2);border-left:3px solid var(--acc);border-radius:10px;
+  padding:10px 16px;font-size:13px;box-shadow:var(--shadow);animation:slide .22s ease;max-width:340px}
+.toast.ok{border-left-color:var(--ok)} .toast.err{border-left-color:var(--err)}
+@keyframes slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+
+/* ---------- 登录 ---------- */
+.login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px;
+  background:radial-gradient(900px 500px at 50% -15%,#152murky 0%,transparent 60%),
+             radial-gradient(700px 400px at 110% 110%,#151f38 0%,transparent 55%),var(--bg)}
+.login-card{width:min(420px,100%);background:linear-gradient(180deg,#141b2b,#101622);
+  border:1px solid var(--line);border-radius:20px;padding:34px 30px 26px;box-shadow:var(--shadow)}
+.logo{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;font-size:26px;margin-bottom:18px;
+  background:linear-gradient(140deg,#2a4a92,#1a2743);border:1px solid #2c3f66}
+.login-card h1{font-size:19px;margin:0 0 6px}
+.login-tabs{display:flex;gap:6px;background:#0b101a;border:1px solid var(--line);padding:4px;border-radius:11px;margin:20px 0 18px}
+.login-tabs button{flex:1;background:transparent;border:0;color:var(--mut);padding:8px;border-radius:8px;cursor:pointer;font-size:13px}
+.login-tabs button.on{background:var(--card2);color:var(--fg);box-shadow:0 1px 0 #2b364c inset}
+.login-card .btn.primary{width:100%;justify-content:center;padding:11px;margin-top:6px}
+.login-foot{margin-top:18px;text-align:center;color:var(--mut2);font-size:11.5px;line-height:1.9}
+
+/* ---------- 外壳 ---------- */
+.shell{display:flex;min-height:100vh}
+.side{width:238px;flex:0 0 238px;background:var(--bg2);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px}
+.brand .mk{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:17px;
+  background:linear-gradient(140deg,#2a4a92,#1a2743);border:1px solid #2c3f66}
+.brand b{font-size:14px;letter-spacing:.3px}
+.brand small{display:block;color:var(--mut2);font-size:10.5px;letter-spacing:1.2px}
+.nav{padding:6px 10px;flex:1;overflow:auto}
+.nav .grp{color:var(--mut2);font-size:10.5px;letter-spacing:1.4px;padding:14px 10px 6px;text-transform:uppercase}
+.nav a{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;color:var(--mut);font-size:13px;cursor:pointer}
+.nav a:hover{background:#141c2b;color:var(--fg)}
+.nav a.on{background:linear-gradient(90deg,#1b2a47,#151d2e);color:#fff;box-shadow:inset 2px 0 0 var(--acc)}
+.nav a .ic{width:18px;text-align:center;font-size:14px}
+.side-foot{padding:12px;border-top:1px solid var(--line);font-size:12px}
+.me{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;background:#111826}
+.avatar{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-size:12px;font-weight:700;
+  background:linear-gradient(140deg,#37528c,#22304d);color:#cfe0ff}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{height:56px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line);
+  background:rgba(10,13,19,.86);backdrop-filter:blur(10px);position:sticky;top:0;z-index:20}
+.crumb{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut);overflow:hidden;white-space:nowrap}
+.crumb b{color:var(--fg);font-weight:600}
+.crumb span.sep{color:var(--mut2)}
+.content{padding:22px 24px 80px;flex:1}
+.page-h{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.page-h h2{font-size:17px;margin:0}
+.page-h .sub{color:var(--mut);font-size:12px}
+
+/* ---------- 统计卡 ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:linear-gradient(180deg,#131a28,#101622);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .k{color:var(--mut);font-size:11.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.stat .v{font-size:20px;font-weight:650;letter-spacing:.3px}
+.stat .v small{font-size:12px;color:var(--mut);font-weight:400;margin-left:3px}
+.stat .bar{height:5px;border-radius:99px;background:#0b101a;margin-top:10px;overflow:hidden}
+.stat .bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff)}
+
+/* ---------- 列表 ---------- */
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.dl{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.dl-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid #1a2233}
+.dl-row:last-child{border-bottom:0}
+.dl-row:hover{background:#131b29}
+.dl-row .nm{display:flex;align-items:center;gap:10px;min-width:0}
+.dl-row .nm .ico{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-size:15px;
+  background:#101826;border:1px solid var(--line);flex:0 0 32px}
+.dl-row .nm .t{min-width:0}
+.dl-row .nm .t b{display:block;font-weight:500;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dl-row .nm .t small{color:var(--mut2);font-size:11.5px}
+.dl-row .acts{display:flex;gap:6px;opacity:.55;transition:.15s}
+.dl-row:hover .acts{opacity:1}
+table.tb{width:100%;border-collapse:collapse;font-size:13px}
+table.tb th{text-align:left;color:var(--mut);font-weight:500;font-size:11.5px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:#0f1622;position:sticky;top:0}
+table.tb td{padding:11px 14px;border-bottom:1px solid #1a2233;vertical-align:middle}
+table.tb tr:hover td{background:#131b29}
+.mini-bar{width:90px;height:6px;border-radius:99px;background:#0b101a;overflow:hidden;display:inline-block;vertical-align:middle}
+.mini-bar i{display:block;height:100%;background:linear-gradient(90deg,#2ec27e,#5fe0a8)}
+.mini-bar i.hot{background:linear-gradient(90deg,#f5a524,#ff7a45)}
+
+/* ---------- 上传 ---------- */
+.drop{border:1.5px dashed #2b3a55;border-radius:var(--r);padding:26px;text-align:center;color:var(--mut);
+  transition:.18s;background:#0d131f;margin-bottom:16px}
+.drop.hot{border-color:var(--acc);background:#101c33;color:var(--fg)}
+.up-item{display:grid;grid-template-columns:1fr 120px;gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid #1a2233;font-size:12.5px}
+.pbar{height:6px;border-radius:99px;background:#0b101a;overflow:hidden}
+.pbar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .2s}
+
+/* ---------- 表格编辑器 ---------- */
+.sheet-wrap{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:auto;max-height:calc(100vh - 260px)}
+table.grid{border-collapse:collapse;font-size:12.5px;table-layout:fixed}
+table.grid th,table.grid td{border:1px solid #1e2739;padding:0;height:28px}
+table.grid th{background:#111a28;color:var(--mut);font-weight:500;font-size:11px;text-align:center;
+  position:sticky;top:0;z-index:3;min-width:84px}
+table.grid th.rowh{position:sticky;left:0;z-index:2;min-width:42px;width:42px}
+table.grid th.corner{position:sticky;left:0;top:0;z-index:4;width:42px;min-width:42px;background:#0f1622}
+table.grid td input{width:100%;height:27px;border:0;background:transparent;padding:0 7px;outline:none;font-size:12.5px}
+table.grid td input:focus{box-shadow:inset 0 0 0 2px var(--acc);background:#0b1524}
+table.grid td.sel{background:#152238}
+
+/* ---------- 文档编辑器 ---------- */
+.doc-split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.doc-split{grid-template-columns:1fr}}
+.editor{width:100%;min-height:calc(100vh - 300px);background:#0c111b;border:1px solid var(--line);border-radius:12px;
+  padding:16px;resize:vertical;outline:none;font:13px/1.75 ui-monospace,Consolas,monospace}
+.preview{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;overflow:auto;
+  min-height:calc(100vh - 300px);max-height:calc(100vh - 300px);font-size:14px;line-height:1.85}
+.preview h1,.preview h2,.preview h3{line-height:1.4}
+.preview h2{font-size:16px;border-left:3px solid var(--acc);padding-left:10px;margin:22px 0 8px}
+.preview h3{font-size:14.5px;margin:16px 0 6px}
+.preview code{background:#1a2130;padding:1px 5px;border-radius:4px;font-size:12px}
+.preview pre{background:#0c111b;border:1px solid var(--line);border-radius:9px;padding:12px;overflow:auto}
+.preview pre code{background:none;padding:0}
+.preview blockquote{border-left:3px solid var(--line);margin:10px 0;padding:2px 14px;color:var(--mut)}
+.preview table{border-collapse:collapse;width:100%;font-size:12.5px}
+.preview th,.preview td{border:1px solid var(--line);padding:6px 9px}
+.preview img{max-width:100%}
+
+/* ---------- 播放器 ---------- */
+.player{background:#000;border-radius:var(--r);overflow:hidden;margin-bottom:14px}
+.player video,.player audio{width:100%;display:block;max-height:74vh;background:#000}
+
+/* ---------- 响应式 ---------- */
+.burger{display:none}
+@media(max-width:860px){
+  .side{position:fixed;inset:0 auto 0 0;z-index:60;transform:translateX(-100%);transition:.22s;box-shadow:var(--shadow)}
+  .side.open{transform:none}
+  .burger{display:inline-flex}
+  .content{padding:16px 14px 90px}
+  .dl-row{grid-template-columns:1fr;gap:8px}
+  .dl-row .acts{opacity:1}
+  .top{padding:0 12px}
+}
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55}
 </style>
 </head>
 <body>
-<header>
-  <h1>PAN R2</h1>
-  <nav id="nav" class="hidden">
-    <button data-tab="files" class="on">文件</button>
-    <button data-tab="accounts">账号</button>
-    <button data-tab="shares">分享</button>
-    <button data-tab="visits">访问</button>
-    <button data-tab="account">我的账号</button>
-  </nav>
-  <div class="spacer"></div>
-  <span id="who" class="prog"></span>
-  <button class="btn ghost hidden" id="logout">退出</button>
-</header>
-<main id="app"></main>
+
+<!-- ============ 登录 ============ -->
+<div id="login" class="login-wrap hide">
+  <div class="login-card">
+    <div class="logo">🗂</div>
+    <h1 id="loginTitle">进入 PAN R2</h1>
+    <div class="mut" id="loginHint">多账号 R2 聚合网盘</div>
+    <div class="login-tabs">
+      <button id="tabFront" class="on" onclick="switchMode('front')">前台访问</button>
+      <button id="tabAdmin" onclick="switchMode('admin')">管理员</button>
+    </div>
+    <div id="frontFields">
+      <div class="field">
+        <label>访问密码</label>
+        <input id="frontPw" class="input" type="password" placeholder="向管理员要一个" onkeydown="if(event.key==='Enter')doLogin()" />
+      </div>
+    </div>
+    <div id="adminFields" class="hide">
+      <div class="field">
+        <label>用户名</label>
+        <input id="admUser" class="input" placeholder="admin" value="admin" onkeydown="if(event.key==='Enter')doLogin()" />
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="admPw" class="input" type="password" onkeydown="if(event.key==='Enter')doLogin()" />
+      </div>
+    </div>
+    <button class="btn primary" id="loginBtn" onclick="doLogin()">进入</button>
+    <div class="login-foot">
+      <span id="loginErr" style="color:#ffb0b3"></span><br />
+      前台只能浏览与下载；上传、目录、账号、日志在管理员后台
+    </div>
+  </div>
+</div>
+
+<!-- ============ 主界面 ============ -->
+<div id="app" class="shell hide">
+  <aside class="side" id="side">
+    <div class="brand">
+      <div class="mk">🗂</div>
+      <div><b>PAN R2</b><small>AGGREGATE DRIVE</small></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="side-foot">
+      <div class="me">
+        <div class="avatar" id="meAv">?</div>
+        <div style="min-width:0">
+          <div id="meName" style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+          <div class="mut" id="meRole" style="font-size:11px">—</div>
+        </div>
+      </div>
+      <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:8px" onclick="logout()">退出登录</button>
+    </div>
+  </aside>
+  <div class="mask hide" id="mask" onclick="toggleSide(false)"></div>
+  <div class="main">
+    <div class="top">
+      <button class="btn ghost sm burger" onclick="toggleSide(true)">☰</button>
+      <div class="crumb" id="crumb"></div>
+      <div class="spacer"></div>
+      <div class="pill acc" id="topPill">前台 · 只读</div>
+    </div>
+    <div class="content" id="view"></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
 <script>
-const app = document.getElementById('app');
+/* ============================================================
+   PAN R2 前端：一套壳，两套权限。can.* 决定看到什么。
+   ============================================================ */
 const $ = (s) => document.querySelector(s);
-const api = (path, opt = {}) =>
-  fetch('/api' + path, { credentials: 'include', ...opt }).then(async (r) => {
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    return j;
-  });
-const jpost = (path, body) => api(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
-const fmt = (n) => {
-  if (!n) return '0 B';
-  const u = ['B','KB','MB','GB','TB']; let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return n.toFixed(n < 10 && i ? 1 : 0) + ' ' + u[i];
+const el = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstElementChild; };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const state = {
+  user: null, can: {}, mode: 'front',
+  folder: null, folders: [], path: [],
+  view: 'files', fileId: null, sheetId: null, docId: null,
 };
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
-let state = { role: null, tab: 'files', folder: null, accounts: [], shares: [] };
+/* ---------- 基础 ---------- */
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { ...(opts.body && !(opts.body instanceof ArrayBuffer) ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) },
+    credentials: 'same-origin',
+  });
+  const ct = res.headers.get('Content-Type') || '';
+  if (!res.ok) {
+    let msg = res.status + '';
+    try { msg = ct.includes('json') ? (await res.json()).error || msg : await res.text(); } catch {}
+    const e = new Error(msg); e.status = res.status; throw e;
+  }
+  return ct.includes('json') ? res.json() : res;
+}
+function toast(msg, kind = '') {
+  const t = el(`<div class="toast ${kind}">${esc(msg)}</div>`);
+  $('#toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = 0; t.style.transition = '.3s'; setTimeout(() => t.remove(), 320); }, 2600);
+}
+const bytes = (n) => {
+  n = Number(n) || 0;
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 2 : 1) : n) + ' ' + u[i];
+};
+const when = (s) => { if (!s) return '—'; const d = new Date(s); return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+const fileIcon = (n) => {
+  const e = (n.split('.').pop() || '').toLowerCase();
+  if (['mp4', 'mkv', 'mov', 'webm', 'avi'].includes(e)) return '🎬';
+  if (['mp3', 'flac', 'wav', 'm4a', 'aac'].includes(e)) return '🎵';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(e)) return '🖼';
+  if (e === 'pdf') return '📕';
+  if (['zip', 'rar', '7z', 'gz', 'tar'].includes(e)) return '🗜';
+  if (['md', 'txt', 'doc', 'docx'].includes(e)) return '📄';
+  return '📦';
+};
 
-// ---------- 登录 ----------
-function renderLogin() {
-  app.innerHTML = `<div class="login"><h2>登录 PAN R2</h2>
-    <input id="u" placeholder="用户名" autocomplete="username" />
-    <input id="p" type="password" placeholder="访问密码" autocomplete="current-password" />
-    <div class="err" id="e"></div>
-    <button class="btn" style="width:100%" id="go">进入</button></div>`;
-  const go = async () => {
-    try {
-      await jpost('/login', { username: $('#u').value, password: $('#p').value });
-      boot();
-    } catch (err) { $('#e').textContent = err.message; }
-  };
-  $('#go').onclick = go;
-  $('#p').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+/* ---------- 登录 ---------- */
+function switchMode(m) {
+  state.mode = m;
+  $('#tabFront').classList.toggle('on', m === 'front');
+  $('#tabAdmin').classList.toggle('on', m === 'admin');
+  $('#frontFields').classList.toggle('hide', m !== 'front');
+  $('#adminFields').classList.toggle('hide', m !== 'admin');
+  $('#loginTitle').textContent = m === 'front' ? '进入前台' : '管理员登录';
+  $('#loginHint').textContent = m === 'front' ? '输入访问密码，浏览与下载文件' : '管理文件、账号、日志';
+  $('#loginErr').textContent = '';
+}
+async function doLogin() {
+  const btn = $('#loginBtn'); btn.disabled = true; $('#loginErr').textContent = '';
+  try {
+    if (state.mode === 'front') {
+      await api('/api/front/login', { method: 'POST', body: JSON.stringify({ password: $('#frontPw').value }) });
+    } else {
+      await api('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#admUser').value, password: $('#admPw').value }) });
+    }
+    await boot();
+  } catch (e) { $('#loginErr').textContent = e.message; }
+  finally { btn.disabled = false; }
+}
+async function logout() {
+  await api('/api/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
 }
 
-// ---------- 外壳 ----------
+/* ---------- 启动 ---------- */
 async function boot() {
   let me;
-  try { me = await api('/me'); } catch { return renderLogin(); }
-  state.role = me.user.role;
-  $('#nav').classList.remove('hidden');
-  $('#logout').classList.remove('hidden');
-  $('#who').textContent = me.user.role === 'admin' ? '管理员' : '只读用户';
-  $('#logout').onclick = async () => { await jpost('/logout'); location.reload(); };
-  $('#nav').onclick = (e) => {
-    const b = e.target.closest('button[data-tab]');
-    if (!b) return;
-    state.tab = b.dataset.tab;
-    [...$('#nav').children].forEach((x) => x.classList.toggle('on', x === b));
-    render();
-  };
-  render();
-}
-
-function render() {
-  if (state.tab === 'files') return renderFiles();
-  if (state.tab === 'accounts') return renderAccounts();
-  if (state.tab === 'shares') return renderShares();
-  if (state.tab === 'account') return renderAccount();
-  if (state.tab === 'visits') return renderVisits();
-}
-
-// ---------- 我的账号（改密码） ----------
-function renderAccount() {
-  app.innerHTML = `<div class="login"><h2>修改访问密码</h2>
-    <input id="op" type="password" placeholder="当前密码" autocomplete="current-password" />
-    <input id="np" type="password" placeholder="新密码（至少 8 位）" autocomplete="new-password" />
-    <input id="np2" type="password" placeholder="再输一次新密码" autocomplete="new-password" />
-    <div class="err" id="e"></div>
-    <button class="btn" style="width:100%" id="go">保存</button></div>`;
-  $('#go').onclick = async () => {
-    const op = $('#op').value, np = $('#np').value, np2 = $('#np2').value;
-    $('#e').textContent = '';
-    if (np !== np2) return ($('#e').textContent = '两次新密码不一致');
-    try {
-      await jpost('/password', { oldPassword: op, newPassword: np });
-      $('#e').style.color = '#5ac8a0';
-      $('#e').textContent = '改好了，下次用新密码登录';
-      $('#op').value = $('#np').value = $('#np2').value = '';
-    } catch (err) { $('#e').style.color = ''; $('#e').textContent = err.message; }
-  };
-}
-
-// ---------- 文件 ----------
-async function renderFiles() {
-  const [st, fl] = await Promise.all([api('/stats'), api('/files' + (state.folder ? '?folder=' + state.folder : ''))]);
-  const pct = st.capacity ? Math.round((st.used / st.capacity) * 100) : 0;
-  const rows = fl.files.map((f) => `
-    <tr>
-      <td>${esc(f.name)}</td>
-      <td>${fmt(f.size)}</td>
-      <td>${f.chunks_count} 片</td>
-      <td class="row">
-        <a class="btn mini ghost" href="/api/files/${f.id}/play" target="_blank" rel="noopener">播放</a>
-        <button class="btn mini ghost" data-dl="${f.id}" data-name="${esc(f.name)}" data-size="${f.size}">下载</button>
-        <button class="btn mini ghost" data-share="${f.id}" data-name="${esc(f.name)}">分享</button>
-      </td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:var(--mut)">空空的，拖个文件上来</td></tr>`;
-
-  app.innerHTML = `
-    <div class="bar">
-      <span><b>${fmt(st.used)}</b> / ${fmt(st.capacity)}</span>
-      <span>${st.accounts} 账号</span>
-      <div class="meter"><i style="width:${pct}%"></i></div>
-      <span>${pct}%</span>
-    </div>
-    <div class="drop" id="drop">把文件拖进来，或点这里选择（大文件自动分片续传）</div>
-    <input type="file" id="file" multiple class="hidden" />
-    <div class="prog" id="prog"></div>
-    <div id="sharepanel"></div>
-    <table>
-      <thead><tr><th>名称</th><th>大小</th><th>分片</th><th>操作</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-
-  const drop = $('#drop'), fileInput = $('#file');
-  drop.onclick = () => fileInput.click();
-  fileInput.onchange = () => { [...fileInput.files].forEach(uploadOne); fileInput.value = ''; };
-  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('hot'); };
-  drop.ondragleave = () => drop.classList.remove('hot');
-  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('hot'); [...e.dataTransfer.files].forEach(uploadOne); };
-
-  app.onclick = async (e) => {
-    const dl = e.target.closest('button[data-dl]');
-    if (dl) { downloadFile(dl.dataset.dl, dl.dataset.name, Number(dl.dataset.size)); return; }
-    const b = e.target.closest('button[data-share]');
-    if (!b) return;
-    b.disabled = true;
-    try {
-      const r = await jpost('/files/' + b.dataset.share + '/share', { ttlSec: 7 * 86400 });
-      const url = location.origin + r.url;
-      $('#sharepanel').innerHTML = `<div class="card"><h3>分享链接 · ${esc(b.dataset.name)}</h3>
-        <div class="sharebox"><input id="su" readonly value="${esc(url)}" />
-        <button class="btn mini" id="copy">复制</button></div>
-        <div class="prog" style="margin-top:8px">7 天后过期 · 可在「分享」页撤销</div></div>`;
-      $('#copy').onclick = async () => {
-        await navigator.clipboard.writeText(url);
-        $('#copy').textContent = '已复制';
-      };
-    } catch (err) { alert('分享失败：' + err.message); }
-    b.disabled = false;
-  };
-}
-
-// 分段下载：单请求服务端最多拼 50 片（免费版 50 个外部子请求），
-// 大文件按 Content-Range 的 end 一段段续拉，用 File System Access API 直接写盘，
-// 避免整文件进内存。不支持时退回普通链接触发浏览器原生 Range。
-async function downloadFile(id, name, size) {
-  if (!window.showSaveFilePicker) {
-    location.href = '/api/files/' + id + '/download?dl=1';
+  try { me = await api('/api/me'); } catch { me = { user: null }; }
+  if (!me.user) {
+    $('#app').classList.add('hide');
+    $('#login').classList.remove('hide');
+    if (!me.frontReady) { $('#tabFront').title = '前台密码还没设置'; }
     return;
   }
-  let handle;
+  state.user = me.user; state.can = me.can || {};
+  $('#login').classList.add('hide');
+  $('#app').classList.remove('hide');
+  $('#meName').textContent = me.user.name || '—';
+  $('#meRole').textContent = me.user.kind === 'admin' ? '管理员' : '前台访客';
+  $('#meAv').textContent = (me.user.name || '?').slice(0, 1).toUpperCase();
+  const pill = $('#topPill');
+  pill.textContent = me.user.kind === 'admin' ? '管理员' : '前台 · 只读';
+  pill.className = 'pill ' + (me.user.kind === 'admin' ? 'ok' : 'acc');
+  renderNav();
+  await go('files');
+}
+
+function renderNav() {
+  const c = state.can;
+  const items = [
+    { k: 'files', t: '文件', ic: '📁', grp: '浏览' },
+    { k: 'sheets', t: '表格', ic: '📊', grp: '浏览' },
+    { k: 'docs', t: '文档', ic: '📝', grp: '浏览' },
+  ];
+  if (c.write) items.push({ k: 'upload', t: '上传', ic: '⬆️', grp: '编辑' });
+  if (c.accounts) items.push({ k: 'accounts', t: '账号池', ic: '🔑', grp: '管理' });
+  if (c.shares) items.push({ k: 'shares', t: '分享', ic: '🔗', grp: '管理' });
+  if (c.users) items.push({ k: 'users', t: '用户与密码', ic: '👤', grp: '管理' });
+  if (c.logs) items.push({ k: 'visits', t: '访问日志', ic: '📈', grp: '管理' });
+  if (c.password) items.push({ k: 'account', t: '我的账号', ic: '⚙️', grp: '管理' });
+
+  let html = '', lastGrp = '';
+  for (const it of items) {
+    if (it.grp !== lastGrp) { html += `<div class="grp">${it.grp}</div>`; lastGrp = it.grp; }
+    html += `<a data-k="${it.k}" onclick="go('${it.k}')"><span class="ic">${it.ic}</span>${it.t}</a>`;
+  }
+  $('#nav').innerHTML = html;
+}
+
+function setNav(k) {
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.k === k));
+}
+
+async function go(view, opts = {}) {
+  state.view = view;
+  if (opts.folder !== undefined) state.folder = opts.folder;
+  setNav(view);
+  toggleSide(false);
+  const v = $('#view');
+  v.innerHTML = '<div class="empty">载入中…</div>';
   try {
-    handle = await window.showSaveFilePicker({ suggestedName: name });
-  } catch { return; } // 用户取消
-  const w = await handle.createWritable();
-  const SEG = 2 * 1024 ** 3; // 每次最多请求 2GiB，服务端还会按 50 片夹断
-  let start = 0;
-  try {
-    while (start < size) {
-      const want = Math.min(start + SEG - 1, size - 1);
-      const r = await fetch('/api/files/' + id + '/download', {
-        credentials: 'include',
-        headers: { 'Range': 'bytes=' + start + '-' + want },
-      });
-      if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
-      await w.write(new Uint8Array(await r.arrayBuffer()));
-      const cr = r.headers.get('Content-Range'); // bytes a-b/total
-      let end = want;
-      if (cr) { const m = /bytes\s+(\d+)-(\d+)/.exec(cr); if (m) end = Number(m[2]); }
-      start = end + 1;
-    }
-    await w.close();
-  } catch (err) {
-    await w.abort();
-    alert('下载中断：' + err.message + '（可重新点击继续）');
+    if (view === 'files') return await renderFiles();
+    if (view === 'sheets') return await renderSheets();
+    if (view === 'docs') return await renderDocs();
+    if (view === 'upload') return await renderUpload();
+    if (view === 'accounts') return await renderAccounts();
+    if (view === 'shares') return await renderShares();
+    if (view === 'users') return await renderUsers();
+    if (view === 'visits') return await renderVisits();
+    if (view === 'account') return await renderAccount();
+    if (view === 'player') return await renderPlayer(opts.id);
+    if (view === 'sheet') return await renderSheetEditor(opts.id);
+    if (view === 'doc') return await renderDocEditor(opts.id);
+  } catch (e) {
+    v.innerHTML = `<div class="card" style="padding:22px"><b style="color:#ffb0b3">出错了</b><div class="mut" style="margin-top:6px">${esc(e.message)}</div></div>`;
   }
 }
 
-// 大文件：分片大小自适应 + 并发上传 + 断点续传
-function chooseChunkSize(size) {
-  if (size > 8 * 1024 ** 3) return 64 * 1024 * 1024;   // >8GB → 64MB
-  if (size > 512 * 1024 ** 2) return 32 * 1024 * 1024; // >512MB → 32MB
+function toggleSide(on) {
+  $('#side').classList.toggle('open', on);
+  $('#mask').classList.toggle('hide', !on);
+}
+
+function crumb(parts) {
+  $('#crumb').innerHTML = parts.map((p, i) =>
+    i < parts.length - 1
+      ? `<span>${esc(p.t)}</span><span class="sep">/</span>`
+      : `<b>${esc(p.t)}</b>`).join('');
+}
+
+/* ---------- 统计条 ---------- */
+function statsHtml(s) {
+  const pct = s.capacity ? Math.min(100, (s.used / s.capacity) * 100) : 0;
+  return `<div class="stats">
+    <div class="stat"><div class="k">📁 文件</div><div class="v">${s.files}<small>个</small></div>
+      <div class="mut" style="margin-top:4px">共 ${bytes(s.filesSize)}</div></div>
+    <div class="stat"><div class="k">🔑 账号</div><div class="v">${s.accounts}<small>个</small></div>
+      <div class="mut" style="margin-top:4px">合计 ${bytes(s.capacity)}</div></div>
+    <div class="stat"><div class="k">💾 已用</div><div class="v">${bytes(s.used)}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="mut" style="margin-top:6px">${pct.toFixed(1)}% 已占用</div></div>
+    <div class="stat"><div class="k">📊 表格 / 文档</div><div class="v">${s.folders ?? 0}<small>目录</small></div>
+      <div class="mut" style="margin-top:4px">在线编辑区</div></div>
+  </div>`;
+}
+
+/* ---------- 文件 ---------- */
+async function renderFiles() {
+  const q = state.folder === null ? '' : `?folder=${state.folder}`;
+  const [{ files }, tree, st] = await Promise.all([api('/api/files' + q), api('/api/tree'), api('/api/stats')]);
+  const { sheets } = await api('/api/sheets' + q);
+  const { docs } = await api('/api/docs' + q);
+  state.folders = tree.folders || [];
+
+  // 面包屑
+  const path = [];
+  let cur = state.folder;
+  while (cur) {
+    const f = state.folders.find((x) => x.id === cur);
+    if (!f) break;
+    path.unshift(f); cur = f.parent_id;
+  }
+  crumb([{ t: '根目录' }, ...path.map((p) => ({ t: p.name }))]);
+
+  const subFolders = state.folders.filter((f) => f.parent_id === state.folder);
+  const c = state.can;
+
+  let html = statsHtml(st);
+  html += `<div class="page-h"><h2>${state.folder === null ? '全部文件' : esc(path[path.length - 1]?.name || '')}</h2>
+    <span class="sub">${files.length} 个文件 · ${subFolders.length} 个目录</span>
+    <div class="spacer"></div>
+    ${c.write ? `<button class="btn sm" onclick="newFolder()">＋ 新建目录</button>
+      <button class="btn sm" onclick="newSheet()">＋ 表格</button>
+      <button class="btn sm" onclick="newDoc()">＋ 文档</button>
+      <button class="btn sm primary" onclick="go('upload')">⬆️ 上传</button>` : ''}
+  </div>`;
+
+  const items = [
+    ...subFolders.map((f) => ({ kind: 'folder', ...f })),
+    ...docs.map((d) => ({ kind: 'doc', ...d })),
+    ...sheets.map((s) => ({ kind: 'sheet', ...s })),
+    ...files.map((f) => ({ kind: 'file', ...f })),
+  ];
+
+  if (state.folder !== null) {
+    const parent = path[path.length - 2]?.id ?? null;
+    html += `<div class="dl"><div class="dl-row"><div class="nm"><div class="ico">↩</div>
+      <div class="t"><b>.. 返回上级</b></div></div><div class="acts"></div></div></div>`;
+  }
+
+  if (!items.length) {
+    html += `<div class="card"><div class="empty"><div class="big">🗂</div>
+      这里还空着${c.write ? '，拖文件进来或点右上角上传' : ''}</div></div>`;
+  } else {
+    html += '<div class="dl">';
+    for (const it of items) {
+      if (it.kind === 'folder') {
+        html += row(it.name, `${it.files} 个文件 · ${bytes(it.bytes)}`, '📁',
+          `<button class="btn sm" onclick="go('files',{folder:${it.id}})">打开</button>
+           ${c.write ? `<button class="btn sm ghost" onclick="renameFolder(${it.id},'${esc(it.name)}')">重命名</button>
+           <button class="btn sm danger" onclick="delFolder(${it.id})">删除</button>` : ''}`);
+      } else if (it.kind === 'sheet') {
+        html += row(it.name, `${it.rows}×${it.cols} · 更新于 ${when(it.updated_at)}`, '📊',
+          `<button class="btn sm" onclick="openSheet('${it.id}')">${c.write ? '编辑' : '查看'}</button>
+           <a class="btn sm ghost" href="/api/sheets/${it.id}/export">导出</a>
+           ${c.write ? `<button class="btn sm danger" onclick="delSheet('${it.id}')">删除</button>` : ''}`);
+      } else if (it.kind === 'doc') {
+        html += row(it.name, `${bytes(it.size)} · 更新于 ${when(it.updated_at)}`, '📝',
+          `<button class="btn sm" onclick="openDoc('${it.id}')">${c.write ? '编辑' : '查看'}</button>
+           <a class="btn sm ghost" href="/api/docs/${it.id}?view=1" target="_blank">预览</a>
+           ${c.write ? `<button class="btn sm danger" onclick="delDoc('${it.id}')">删除</button>` : ''}`);
+      } else {
+        const isVideo = /\.(mp4|webm|ogg|mov|m4v)$/i.test(it.name);
+        html += row(it.name, `${bytes(it.size)} · ${it.chunks_count} 片 · ${when(it.created_at)}`, fileIcon(it.name),
+          `${isVideo ? `<button class="btn sm" onclick="play('${it.id}')">播放</button>` : ''}
+           <button class="btn sm primary" onclick="downloadFile('${it.id}','${esc(it.name)}',${it.size})">下载</button>
+           ${c.shares ? `<button class="btn sm ghost" onclick="shareFile('${it.id}')">分享</button>` : ''}
+           ${c.write ? `<button class="btn sm danger" onclick="delFile('${it.id}')">删除</button>` : ''}`);
+      }
+    }
+    html += '</div>';
+  }
+  $('#view').innerHTML = html;
+  if (state.folder !== null) {
+    const back = $('#view .dl-row');
+    if (back) back.onclick = () => go('files', { folder: path[path.length - 2]?.id ?? null });
+  }
+}
+
+function row(name, sub, icon, acts) {
+  return `<div class="dl-row"><div class="nm"><div class="ico">${icon}</div>
+    <div class="t"><b title="${esc(name)}">${esc(name)}</b><small>${esc(sub)}</small></div></div>
+    <div class="acts">${acts}</div></div>`;
+}
+
+/* ---------- 下载（分段续拉，绕开 50 片上限） ---------- */
+async function downloadFile(id, name, size) {
+  // 有 File System Access 就流式写盘；没有就让浏览器直接下载（服务端会夹断，浏览器自己续）
+  if (window.showSaveFilePicker) {
+    let handle;
+    try { handle = await window.showSaveFilePicker({ suggestedName: name }); } catch { return; }
+    const w = await handle.createWritable();
+    let start = 0;
+    try {
+      while (start < size) {
+        const res = await fetch(`/api/files/${id}/download`, { headers: { Range: `bytes=${start}-${size - 1}` }, credentials: 'same-origin' });
+        if (!res.ok) throw new Error('下载失败 ' + res.status);
+        await w.write(await res.arrayBuffer());
+        const cr = res.headers.get('Content-Range');
+        const m = cr && /\/(\d+)$/.exec(cr);
+        const endTo = cr ? Number(/-(\d+)\//.exec(cr)[1]) : size - 1;
+        start = endTo + 1;
+        if (!m) break;
+        // 进度
+        toast(`已下载 ${bytes(start)} / ${bytes(size)}`);
+        if (start >= size) break;
+      }
+      await w.close();
+      toast('下载完成 ' + name, 'ok');
+    } catch (e) {
+      try { await w.abort(); } catch {}
+      toast(e.message, 'err');
+    }
+    return;
+  }
+  location.href = `/api/files/${id}/download?dl=1`;
+}
+
+function play(id) {
+  state.fileId = id;
+  go('player', { id });
+}
+async function renderPlayer(id) {
+  const { files } = await api('/api/files' + (state.folder === null ? '' : `?folder=${state.folder}`));
+  const f = files.find((x) => x.id === id);
+  crumb([{ t: '文件' }, { t: f ? f.name : '播放' }]);
+  const isAudio = /\.(mp3|m4a|flac|wav|aac|ogg)$/i.test(f?.name || '');
+  $('#view').innerHTML = `<div class="page-h"><button class="btn sm" onclick="go('files')">← 返回</button>
+    <h2 style="font-size:15px">${esc(f?.name || '')}</h2></div>
+    <div class="player">${isAudio
+      ? `<audio controls autoplay src="/api/files/${id}/play"></audio>`
+      : `<video controls autoplay playsinline src="/api/files/${id}/play"></video>`}</div>
+    <div class="mut">支持拖动进度（Range 按片映射，跨账号也能 seek）。若画面不动，多半是 MKV/HEVC 编码，浏览器不支持。</div>`;
+}
+
+/* ---------- 文件操作 ---------- */
+async function newFolder() {
+  const name = prompt('新目录名');
+  if (!name) return;
+  await api('/api/folders', { method: 'POST', body: JSON.stringify({ name, parentId: state.folder }) });
+  toast('目录已建', 'ok'); go('files');
+}
+async function renameFolder(id, old) {
+  const name = prompt('改名为', old); if (!name || name === old) return;
+  await api(`/api/folders/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+  go('files');
+}
+async function delFolder(id) {
+  if (!confirm('删除这个目录？目录里必须没有文件。')) return;
+  try { await api(`/api/folders/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function delFile(id) {
+  if (!confirm('删除文件？会同时清掉所有分片。')) return;
+  try { await api(`/api/files/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function shareFile(id) {
+  try {
+    const r = await api(`/api/files/${id}/share`, { method: 'POST', body: JSON.stringify({ ttlSec: 7 * 86400 }) });
+    const url = location.origin + r.url;
+    await navigator.clipboard.writeText(url).catch(() => {});
+    toast('分享链接已复制：' + url, 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function newSheet() {
+  const name = prompt('表格名', '未命名表格'); if (!name) return;
+  const r = await api('/api/sheets', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
+  openSheet(r.id);
+}
+async function delSheet(id) {
+  if (!confirm('删除这张表？')) return;
+  await api(`/api/sheets/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files');
+}
+async function newDoc() {
+  const name = prompt('文档名（.md 会按 Markdown 渲染）', '未命名.md'); if (!name) return;
+  const r = await api('/api/docs', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
+  openDoc(r.id);
+}
+async function delDoc(id) {
+  if (!confirm('删除这份文档？')) return;
+  await api(`/api/docs/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files');
+}
+
+/* ---------- 上传 ---------- */
+async function renderUpload() {
+  crumb([{ t: '上传' }]);
+  $('#view').innerHTML = `
+    <div class="page-h"><h2>上传文件</h2>
+      <span class="sub">自动切成 16–64MB 分片，每片挑最空的账号落盘</span></div>
+    <div class="drop" id="drop">
+      <div style="font-size:30px;margin-bottom:8px">⬆️</div>
+      <b>把文件拖到这里</b>，或 <span style="color:var(--acc)">点一下选择</span>
+      <div class="mut" style="margin-top:6px">支持多选；单文件不限大小（分片）</div>
+    </div>
+    <div class="card hide" id="upCard"><div class="page-h" style="padding:14px 16px 0;margin:0"><h2 style="font-size:13px">上传队列</h2></div><div id="upList"></div></div>`;
+  const drop = $('#drop');
+  drop.onclick = () => pickFiles();
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('hot'); };
+  drop.ondragleave = () => drop.classList.remove('hot');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('hot'); queueFiles([...e.dataTransfer.files]); };
+}
+function pickFiles() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  inp.onchange = () => queueFiles([...inp.files]);
+  inp.click();
+}
+function chooseChunk(size) {
+  if (size > 8 * 1024 ** 3) return 64 * 1024 * 1024;
+  if (size > 512 * 1024 ** 2) return 32 * 1024 * 1024;
   return 16 * 1024 * 1024;
 }
 const CONCURRENCY = 3;
-
-async function uploadOne(file) {
-  const prog = $('#prog');
-  const cs = chooseChunkSize(file.size);
-  try {
-    const init = await jpost('/upload/init', { name: file.name, size: file.size, folderId: state.folder, chunkSize: cs });
-    const { uploadId, chunkSize, chunksCount } = init;
-    let done = 0, failed = null;
-    const started = Date.now();
-    prog.textContent = `上传 ${file.name}  0/${chunksCount}`;
-
-    const queue = Array.from({ length: chunksCount }, (_, i) => i);
-    const worker = async () => {
-      while (queue.length) {
-        const i = queue.shift();
-        if (failed) return;
-        const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size));
-        const buf = await blob.arrayBuffer();
-        const r = await fetch(`/api/upload/${uploadId}/chunk/${i}`, { method:'PUT', credentials:'include', body: buf });
-        if (!r.ok) { const j = await r.json().catch(()=>({})); failed = j.error || ('分片 ' + i + ' 失败'); return; }
-        done++;
-        const sec = (Date.now() - started) / 1000;
-        const rate = done * chunkSize / Math.max(sec, 0.001);
-        prog.textContent = `上传 ${file.name}  ${done}/${chunksCount}  ${fmt(Math.min(done * chunkSize, file.size))}/${fmt(file.size)}  ${fmt(rate)}/s`;
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunksCount) }, worker));
-    if (failed) throw new Error(failed);
-
-    await jpost('/upload/' + uploadId + '/complete');
-    prog.textContent = `完成：${file.name}`;
-    renderFiles();
-  } catch (e) {
-    prog.textContent = `失败：${e.message}`;
-  }
-}
-
-// ---------- 账号管理 ----------
-async function renderAccounts() {
-  if (state.role !== 'admin') { app.innerHTML = `<div class="card">只有管理员能看账号池。</div>`; return; }
-  const d = await api('/accounts');
-  state.accounts = d.accounts;
-  const rows = d.accounts.map((a) => {
-    const pct = a.capacity_bytes ? Math.round((a.used_bytes / a.capacity_bytes) * 100) : 0;
-    return `<tr>
-      <td>${esc(a.name)}<div style="color:var(--mut);font-size:11px">${esc(a.bucket)}</div></td>
-      <td style="font-family:ui-monospace,monospace;font-size:11px">${esc(a.account_id.slice(0,10))}…</td>
-      <td style="min-width:130px">
-        <div class="meter" style="margin-bottom:3px"><i style="width:${pct}%"></i></div>
-        <span style="color:var(--mut);font-size:11px">${fmt(a.used_bytes)} / ${fmt(a.capacity_bytes)} · ${pct}%</span>
-      </td>
-      <td>${a.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag off">停用</span>'}</td>
-      <td class="row" style="gap:6px;flex-wrap:wrap">
-        <button class="btn mini ghost" data-test="${a.id}">测连通</button>
-        <button class="btn mini ghost" data-toggle="${a.id}" data-on="${a.enabled}">${a.enabled ? '停用' : '启用'}</button>
-        <button class="btn mini ghost" data-cap="${a.id}" data-cur="${a.capacity_bytes}">改容量</button>
-        <button class="btn mini danger" data-del="${a.id}">删除</button>
-      </td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="5" style="color:var(--mut)">还没有账号，先加一个</td></tr>`;
-
-  const total = d.accounts.reduce((s, a) => s + a.capacity_bytes, 0);
-  const used = d.accounts.reduce((s, a) => s + a.used_bytes, 0);
-
-  app.innerHTML = `
-    <div class="bar"><span><b>${d.accounts.length}</b> 个账号</span>
-      <span>总容量 ${fmt(total)}</span><span>已用 ${fmt(used)}</span></div>
-    <div class="card"><h3>添加账号（每个 CF 账号一个 R2 桶）</h3>
-      <div class="grid">
-        <input id="a-name" placeholder="备注名，如 账号A" />
-        <input id="a-bucket" placeholder="桶名，如 pan-a" />
-        <input id="a-acc" placeholder="Cloudflare Account ID" />
-        <input id="a-ak" placeholder="R2 Access Key ID" />
-        <input id="a-sk" type="password" placeholder="R2 Secret Access Key" />
-        <input id="a-cap" placeholder="容量字节（留空=10GB 免费额度）" />
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button class="btn" id="add">添加</button>
-        <span class="err" id="ae"></span>
-      </div>
-    </div>
-    <table>
-      <thead><tr><th>备注 / 桶</th><th>Account ID</th><th>用量</th><th>状态</th><th>操作</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-
-  $('#add').onclick = async () => {
-    const body = {
-      name: $('#a-name').value.trim(),
-      bucket: $('#a-bucket').value.trim(),
-      account_id: $('#a-acc').value.trim(),
-      access_key_id: $('#a-ak').value.trim(),
-      secret_access_key: $('#a-sk').value.trim(),
-    };
-    const cap = $('#a-cap').value.trim();
-    if (cap) body.capacity_bytes = Number(cap);
-    try { await jpost('/accounts', body); renderAccounts(); }
-    catch (e) { $('#ae').textContent = e.message; }
-  };
-
-  app.onclick = async (e) => {
-    const t = e.target.closest('button');
-    if (!t) return;
+async function queueFiles(files) {
+  if (!files.length) return;
+  $('#upCard').classList.remove('hide');
+  for (const f of files) {
+    const rowEl = el(`<div class="up-item"><div><b>${esc(f.name)}</b><div class="mut">${bytes(f.size)}</div></div>
+      <div class="pbar"><i style="width:0%"></i></div></div>`);
+    $('#upList').appendChild(rowEl);
+    const bar = rowEl.querySelector('.pbar i');
     try {
-      if (t.dataset.test) {
-        const r = await jpost('/accounts/' + t.dataset.test + '/test');
-        alert((r.ok ? '✅ ' : '❌ ') + r.message);
-      } else if (t.dataset.toggle) {
-        await api('/accounts/' + t.dataset.toggle, { method:'PATCH', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ enabled: t.dataset.on === '1' ? 0 : 1 }) });
-        renderAccounts();
-      } else if (t.dataset.cap) {
-        const v = prompt('容量（字节）', t.dataset.cur);
-        if (!v) return;
-        await api('/accounts/' + t.dataset.cap, { method:'PATCH', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ capacity_bytes: Number(v) }) });
-        renderAccounts();
-      } else if (t.dataset.del) {
-        if (!confirm('确认删除该账号？账号下若还有分片会被拒绝。')) return;
-        await api('/accounts/' + t.dataset.del, { method:'DELETE' });
-        renderAccounts();
-      }
-    } catch (err) { alert(err.message); }
+      await uploadOne(f, (pct) => { bar.style.width = pct + '%'; });
+      bar.style.width = '100%';
+      rowEl.querySelector('.mut').innerHTML = '<span style="color:#7ee2b0">完成</span>';
+    } catch (e) {
+      rowEl.querySelector('.mut').innerHTML = `<span style="color:#ffb0b3">失败：${esc(e.message)}</span>`;
+    }
+  }
+  setTimeout(() => go('files'), 600);
+}
+async function uploadOne(file, onProgress) {
+  const chunkSize = chooseChunk(file.size);
+  const { uploadId, chunksCount } = await api('/api/upload/init', {
+    method: 'POST',
+    body: JSON.stringify({ name: file.name, size: file.size, folderId: state.folder, chunkSize }),
+  });
+  let done = 0;
+  const idxs = [...Array(chunksCount).keys()];
+  const worker = async () => {
+    while (idxs.length) {
+      const i = idxs.shift();
+      const buf = await file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize)).arrayBuffer();
+      await api(`/api/upload/${uploadId}/chunk/${i}`, { method: 'PUT', body: buf, headers: { 'Content-Type': 'application/octet-stream' } });
+      done++;
+      onProgress(Math.round((done / chunksCount) * 100));
+    }
   };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunksCount) }, worker));
+  await api(`/api/upload/${uploadId}/complete`, { method: 'POST', body: '{}' });
 }
 
-// ---------- 分享管理 ----------
-async function renderShares() {
-  const d = await api('/shares');
-  state.shares = d.shares;
-  const rows = d.shares.map((s) => `
-    <tr>
-      <td>${esc(s.fileName)}<div style="color:var(--mut);font-size:11px">${fmt(s.size)}</div></td>
-      <td>${s.used}${s.max > 0 ? ' / ' + s.max : ' / 不限'}</td>
-      <td style="font-size:12px">${s.expiresAt ? new Date(s.expiresAt).toLocaleString('zh-CN') : '—'}</td>
-      <td><button class="btn mini danger" data-rev="${s.jti}">撤销</button></td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:var(--mut)">还没有分享链接</td></tr>`;
-
-  app.innerHTML = `
-    <div class="bar"><span><b>${d.shares.length}</b> 条有效分享</span></div>
-    <table>
-      <thead><tr><th>文件</th><th>下载次数</th><th>过期时间</th><th>操作</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-
-  app.onclick = async (e) => {
-    const b = e.target.closest('button[data-rev]');
-    if (!b) return;
-    if (!confirm('撤销后链接立刻失效，确认？')) return;
-    try { await api('/shares/' + b.dataset.rev, { method:'DELETE' }); renderShares(); }
-    catch (err) { alert(err.message); }
-  };
+/* ---------- 表格编辑器 ---------- */
+async function openSheet(id) { state.sheetId = id; go('sheet', { id }); }
+async function renderSheets() {
+  const { sheets } = await api('/api/sheets' + (state.folder === null ? '' : `?folder=${state.folder}`));
+  crumb([{ t: '表格' }]);
+  let html = `<div class="page-h"><h2>在线表格</h2><span class="sub">${sheets.length} 张</span>
+    <div class="spacer"></div>${state.can.write ? `<button class="btn sm primary" onclick="newSheet()">＋ 新建表格</button>` : ''}</div>`;
+  if (!sheets.length) {
+    html += `<div class="card"><div class="empty"><div class="big">📊</div>还没有表格${state.can.write ? '，点右上角新建' : ''}</div></div>`;
+  } else {
+    html += '<div class="dl">';
+    for (const s of sheets) {
+      html += row(s.name, `${s.rows} 行 × ${s.cols} 列 · 更新于 ${when(s.updated_at)}`, '📊',
+        `<button class="btn sm" onclick="openSheet('${s.id}')">${state.can.write ? '编辑' : '查看'}</button>
+         <a class="btn sm ghost" href="/api/sheets/${s.id}/export">导出 TSV</a>`);
+    }
+    html += '</div>';
+  }
+  $('#view').innerHTML = html;
 }
 
-// ---------- 访问日志 ----------
-async function renderVisits() {
-  const d = await api('/visits?limit=120&summary=1');
-  state.visits = d.visits;
-  const sum = d.summary || [];
+async function renderSheetEditor(id) {
+  const me = await api('/api/me');
+  const readOnly = !me.can.write;
+  const { sheet } = await api(`/api/sheets/${id}`);
+  const map = new Map();
+  for (const c of sheet.cells) map.set(`${c.r},${c.c}`, c.v);
+  let rows = sheet.rows, cols = sheet.cols;
+  const colName = (i) => { let s = '', n = i + 1; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - 1) / 26 | 0; } return s; };
 
-  const sumRows = sum.slice(0, 12).map((s) => `
-    <tr>
-      <td style="font-family:ui-monospace,monospace">${esc(s.ip)}${s.ip === d.ip ? ' <span style="color:#5ac8a0">← 你</span>' : ''}</td>
-      <td>${esc(s.country || '—')}</td>
-      <td><b>${s.hits}</b></td>
-      <td>${s.agents}</td>
-      <td style="font-size:12px">${s.last ? new Date(s.last).toLocaleString('zh-CN') : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:var(--mut)">还没有记录</td></tr>`;
-
-  const rows = d.visits.map((v) => `
-    <tr>
-      <td style="font-size:12px;white-space:nowrap">${new Date(v.created_at).toLocaleString('zh-CN')}</td>
-      <td style="font-family:ui-monospace,monospace">${esc(v.ip)}${v.ip === d.ip ? ' <span style="color:#5ac8a0">← 你</span>' : ''}</td>
-      <td style="font-size:12px">${esc([v.country, v.city].filter(Boolean).join(' / ') || '—')}</td>
-      <td>
-        <div style="font-size:12px">${esc(v.method)} ${esc(v.path)}</div>
-        <div style="color:var(--mut);font-size:11px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.ua || '')}">${esc(v.ua || '—')}</div>
-      </td>
-      <td style="color:${v.status >= 400 ? '#ff7b72' : v.status >= 300 ? '#d2a24c' : '#5ac8a0'}">${v.status}</td>
-      <td style="font-size:12px">${v.username ? esc(v.username) : v.uid ? '#' + v.uid : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="6" style="color:var(--mut)">还没有记录</td></tr>`;
-
-  app.innerHTML = `
-    <div class="bar">
-      <span>你的出口 IP <b style="font-family:ui-monospace,monospace">${esc(d.ip)}</b>${d.country ? ' · ' + esc(d.country) : ''}</span>
+  crumb([{ t: '表格' }, { t: sheet.name }]);
+  $('#view').innerHTML = `
+    <div class="page-h">
+      <button class="btn sm" onclick="go('files')">← 返回</button>
+      <h2 style="font-size:15px" id="sheetName">${esc(sheet.name)}</h2>
       <div class="spacer"></div>
-      <button class="btn ghost mini" id="refresh">刷新</button>
-      <button class="btn ghost mini" id="prune">清理 30 天前</button>
+      ${readOnly ? '<span class="pill">只读</span>' : `
+        <button class="btn sm" onclick="sheetAddRow()">＋ 行</button>
+        <button class="btn sm" onclick="sheetAddCol()">＋ 列</button>
+        <label class="btn sm" style="cursor:pointer">导入 TSV/CSV<input type="file" accept=".tsv,.csv,.txt" style="display:none" onchange="sheetImport(this)"></label>
+        <a class="btn sm ghost" href="/api/sheets/${id}/export">导出</a>
+        <button class="btn sm primary" onclick="sheetSave()">保存</button>`}
     </div>
-    <h3 style="margin:16px 0 8px;font-size:14px">最近 1000 条里按 IP 聚合</h3>
-    <table>
-      <thead><tr><th>IP</th><th>地区</th><th>命中</th><th>不同 UA</th><th>最后访问</th></tr></thead>
-      <tbody>${sumRows}</tbody>
-    </table>
-    <h3 style="margin:20px 0 8px;font-size:14px">原始记录（最新 ${d.visits.length} 条）</h3>
-    <table>
-      <thead><tr><th>时间</th><th>IP</th><th>地区</th><th>请求</th><th>状态</th><th>用户</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    <div class="sheet-wrap"><table class="grid" id="grid"></table></div>
+    <div class="mut" style="margin-top:10px">支持公式：<code class="mono">=SUM(A1:A9)</code>、<code class="mono">=B1*C1</code>、AVG/MIN/MAX/COUNT。保存后表格出现在前台目录里。</div>`;
 
-  $('#refresh').onclick = () => renderVisits();
-  $('#prune').onclick = async () => {
-    if (!confirm('删除 30 天前的访问记录？')) return;
-    try { const r = await jpost('/visits/prune', { days: 30 }); alert(`清掉 ${r.removed} 条`); renderVisits(); }
-    catch (err) { alert(err.message); }
+  function draw() {
+    const t = $('#grid');
+    let h = '<tr><th class="corner"></th>';
+    for (let c = 0; c < cols; c++) h += `<th>${colName(c)}</th>`;
+    h += '</tr>';
+    for (let r = 0; r < rows; r++) {
+      h += `<tr><th class="rowh">${r + 1}</th>`;
+      for (let c = 0; c < cols; c++) {
+        const v = map.get(`${r},${c}`) ?? '';
+        h += `<td><input data-r="${r}" data-c="${c}" value="${esc(v)}" ${readOnly ? 'readonly' : ''}></td>`;
+      }
+      h += '</tr>';
+    }
+    t.innerHTML = h;
+    t.querySelectorAll('input').forEach((inp) => {
+      inp.onchange = () => {
+        const k = `${inp.dataset.r},${inp.dataset.c}`;
+        if (inp.value === '') map.delete(k); else map.set(k, inp.value);
+      };
+    });
+  }
+  draw();
+
+  window.sheetAddRow = () => { rows++; draw(); };
+  window.sheetAddCol = () => { cols++; draw(); };
+  window.sheetSave = async () => {
+    const cells = [...map.entries()].map(([k, v]) => { const [r, c] = k.split(',').map(Number); return { r, c, v }; });
+    try { await api(`/api/sheets/${id}/save`, { method: 'POST', body: JSON.stringify({ rows, cols, cells }) }); toast('已保存', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
   };
+  window.sheetImport = async (inp) => {
+    const text = await inp.files[0].text();
+    try {
+      const r = await api(`/api/sheets/${id}/import`, { method: 'POST', body: JSON.stringify({ text }) });
+      toast(`导入 ${r.saved} 格`, 'ok'); renderSheetEditor(id);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* ---------- 文档编辑器 ---------- */
+async function openDoc(id) { state.docId = id; go('doc', { id }); }
+async function renderDocs() {
+  const { docs } = await api('/api/docs' + (state.folder === null ? '' : `?folder=${state.folder}`));
+  crumb([{ t: '文档' }]);
+  let html = `<div class="page-h"><h2>在线文档</h2><span class="sub">${docs.length} 份</span>
+    <div class="spacer"></div>${state.can.write ? `<button class="btn sm primary" onclick="newDoc()">＋ 新建文档</button>` : ''}</div>`;
+  if (!docs.length) html += `<div class="card"><div class="empty"><div class="big">📝</div>还没有文档</div></div>`;
+  else {
+    html += '<div class="dl">';
+    for (const d of docs) {
+      html += row(d.name, `${bytes(d.size)} · 更新于 ${when(d.updated_at)}`, '📝',
+        `<button class="btn sm" onclick="openDoc('${d.id}')">${state.can.write ? '编辑' : '查看'}</button>
+         <a class="btn sm ghost" href="/api/docs/${d.id}?view=1" target="_blank">预览</a>`);
+    }
+    html += '</div>';
+  }
+  $('#view').innerHTML = html;
+}
+
+async function renderDocEditor(id) {
+  const me = await api('/api/me');
+  const readOnly = !me.can.write;
+  const { doc } = await api(`/api/docs/${id}`);
+  crumb([{ t: '文档' }, { t: doc.name }]);
+  $('#view').innerHTML = `
+    <div class="page-h">
+      <button class="btn sm" onclick="go('files')">← 返回</button>
+      <h2 style="font-size:15px">${esc(doc.name)}</h2>
+      <span class="pill">${bytes(doc.size)}</span>
+      <div class="spacer"></div>
+      <a class="btn sm ghost" href="/api/docs/${id}?view=1" target="_blank">新窗口预览</a>
+      ${readOnly ? '<span class="pill">只读</span>' : `<button class="btn sm primary" onclick="docSave()">保存</button>`}
+    </div>
+    <div class="doc-split">
+      <textarea class="editor" id="docText" ${readOnly ? 'readonly' : ''} spellcheck="false"></textarea>
+      <div class="preview" id="docPreview"></div>
+    </div>`;
+  const ta = $('#docText');
+  ta.value = doc.content;
+  const render = () => { $('#docPreview').innerHTML = mdMini(ta.value); };
+  ta.oninput = render; render();
+  window.docSave = async () => {
+    try { await api(`/api/docs/${id}/save`, { method: 'POST', body: JSON.stringify({ content: ta.value }) }); toast('已保存', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  ta.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); window.docSave(); } };
+}
+
+function mdMini(s) {
+  const e = esc(s);
+  const lines = e.split('\n');
+  const out = []; let code = false, list = null, para = [];
+  const inl = (t) => t.replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  const flush = () => { if (para.length) { out.push('<p>' + para.map(inl).join('<br>') + '</p>'); para = []; } };
+  const closeL = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+  for (const l of lines) {
+    if (/^```/.test(l)) { flush(); closeL(); out.push(code ? '</code></pre>' : '<pre><code>'); code = !code; continue; }
+    if (code) { out.push(l); continue; }
+    if (!l.trim()) { flush(); closeL(); continue; }
+    let m;
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(l))) { flush(); closeL(); out.push(`<h${m[1].length}>${inl(m[2])}</h${m[1].length}>`); continue; }
+    if (/^&gt;\s?/.test(l)) { flush(); closeL(); out.push('<blockquote>' + inl(l.replace(/^&gt;\s?/, '')) + '</blockquote>'); continue; }
+    if ((m = /^\s*[-*+]\s+(.*)$/.exec(l))) { flush(); if (list !== 'ul') { closeL(); out.push('<ul>'); list = 'ul'; } out.push('<li>' + inl(m[1]) + '</li>'); continue; }
+    if ((m = /^\s*\d+\.\s+(.*)$/.exec(l))) { flush(); if (list !== 'ol') { closeL(); out.push('<ol>'); list = 'ol'; } out.push('<li>' + inl(m[1]) + '</li>'); continue; }
+    para.push(l);
+  }
+  if (code) out.push('</code></pre>');
+  flush(); closeL();
+  return out.join('\n');
+}
+
+/* ---------- 账号池 ---------- */
+async function renderAccounts() {
+  const { accounts } = await api('/api/accounts');
+  crumb([{ t: '账号池' }]);
+  let html = `<div class="page-h"><h2>R2 账号池</h2><span class="sub">${accounts.length} 个账号，分片自动选最空的落盘</span>
+    <div class="spacer"></div><button class="btn sm primary" onclick="accountForm()">＋ 添加账号</button></div>`;
+  html += `<div id="accForm"></div>`;
+  if (!accounts.length) {
+    html += `<div class="card"><div class="empty"><div class="big">🔑</div>还没有账号。到 Cloudflare → R2 → Manage R2 API Tokens 建一对 S3 凭证。</div></div>`;
+  } else {
+    html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+      <th>名称</th><th>桶</th><th>Account ID</th><th>用量</th><th>状态</th><th></th></tr></thead><tbody>`;
+    for (const a of accounts) {
+      const pct = a.capacity_bytes ? Math.min(100, (a.used_bytes / a.capacity_bytes) * 100) : 0;
+      html += `<tr>
+        <td><b>${esc(a.name)}</b></td>
+        <td class="mono">${esc(a.bucket)}</td>
+        <td class="mono" style="color:var(--mut)">${esc(a.account_id.slice(0, 8))}…</td>
+        <td><div class="mini-bar"><i class="${pct > 85 ? 'hot' : ''}" style="width:${pct}%"></i></div>
+          <div class="mut" style="margin-top:4px">${bytes(a.used_bytes)} / ${bytes(a.capacity_bytes)}</div></td>
+        <td>${a.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill">停用</span>'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn sm" onclick="accTest(${a.id})">测连通</button>
+          <button class="btn sm ghost" onclick="accToggle(${a.id},${a.enabled ? 0 : 1})">${a.enabled ? '停用' : '启用'}</button>
+          <button class="btn sm ghost" onclick="accCap(${a.id},${a.capacity_bytes})">改容量</button>
+          <button class="btn sm danger" onclick="accDel(${a.id})">删除</button>
+        </td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+  $('#view').innerHTML = html;
+}
+
+function accountForm() {
+  $('#accForm').innerHTML = `<div class="card" style="padding:16px;margin-bottom:14px">
+    <div class="row wrap" style="gap:12px">
+      <div style="flex:1;min-width:160px"><div class="field"><label>名称</label><input id="aName" class="input" placeholder="主账号 / 备用"></div></div>
+      <div style="flex:1;min-width:160px"><div class="field"><label>桶名</label><input id="aBucket" class="input" placeholder="pan-files"></div></div>
+      <div style="flex:1;min-width:220px"><div class="field"><label>Cloudflare Account ID</label><input id="aAcc" class="input mono" placeholder="32 位 hex"></div></div>
+    </div>
+    <div class="row wrap" style="gap:12px">
+      <div style="flex:1;min-width:200px"><div class="field"><label>Access Key ID</label><input id="aAk" class="input mono"></div></div>
+      <div style="flex:1;min-width:200px"><div class="field"><label>Secret Access Key</label><input id="aSk" class="input mono" type="password"></div></div>
+      <div style="width:150px"><div class="field"><label>配额 (GB)</label><input id="aCap" class="input" type="number" value="10"></div></div>
+    </div>
+    <div class="row"><button class="btn primary" onclick="accCreate()">保存</button>
+      <button class="btn ghost" onclick="$('#accForm').innerHTML=''">取消</button>
+      <span class="mut">Secret 会用 MASTER_KEY 加密后入库</span></div>
+  </div>`;
+}
+async function accCreate() {
+  try {
+    await api('/api/accounts', { method: 'POST', body: JSON.stringify({
+      name: $('#aName').value, bucket: $('#aBucket').value, account_id: $('#aAcc').value,
+      access_key_id: $('#aAk').value, secret_access_key: $('#aSk').value,
+      capacity_bytes: Math.round(Number($('#aCap').value || 10) * 1024 ** 3),
+    }) });
+    toast('已添加', 'ok'); renderAccounts();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function accTest(id) {
+  toast('测试中…');
+  const r = await api(`/api/accounts/${id}/test`, { method: 'POST', body: '{}' }).catch((e) => ({ ok: false, message: e.message }));
+  toast(r.message || (r.ok ? '连通正常' : '失败'), r.ok ? 'ok' : 'err');
+}
+async function accToggle(id, on) { await api(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled: on }) }); renderAccounts(); }
+async function accCap(id, cur) {
+  const gb = prompt('新容量 (GB)', (cur / 1024 ** 3).toFixed(0)); if (!gb) return;
+  await api(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify({ capacity_bytes: Math.round(Number(gb) * 1024 ** 3) }) });
+  renderAccounts();
+}
+async function accDel(id) {
+  if (!confirm('移除这个账号？上面还有分片时会拒绝。')) return;
+  try { await api(`/api/accounts/${id}`, { method: 'DELETE' }); toast('已移除', 'ok'); renderAccounts(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- 分享 ---------- */
+async function renderShares() {
+  const { shares } = await api('/api/shares');
+  crumb([{ t: '分享' }]);
+  let html = `<div class="page-h"><h2>分享链接</h2><span class="sub">${shares.length} 条</span></div>`;
+  if (!shares.length) html += `<div class="card"><div class="empty"><div class="big">🔗</div>还没有分享。到文件列表点「分享」。</div></div>`;
+  else {
+    html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+      <th>文件</th><th>大小</th><th>下载次数</th><th>过期</th><th></th></tr></thead><tbody>`;
+    for (const s of shares) {
+      html += `<tr><td>${esc(s.fileName)}</td><td class="mut">${bytes(s.size)}</td>
+        <td>${s.used}${s.max ? ' / ' + s.max : ' / 不限'}</td>
+        <td class="mut">${s.expiresAt ? new Date(s.expiresAt).toLocaleString('zh-CN') : '—'}</td>
+        <td style="text-align:right"><button class="btn sm danger" onclick="revokeShare('${s.jti}')">撤销</button></td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+  $('#view').innerHTML = html;
+}
+async function revokeShare(jti) {
+  if (!confirm('撤销这条分享？')) return;
+  await api(`/api/shares/${jti}`, { method: 'DELETE' }); toast('已撤销', 'ok'); renderShares();
+}
+
+/* ---------- 用户与前台密码 ---------- */
+async function renderUsers() {
+  const [{ users, frontReady }] = await Promise.all([api('/api/users')]);
+  crumb([{ t: '用户与密码' }]);
+  let html = `<div class="page-h"><h2>用户</h2><span class="sub">前台访客共用一个访问密码</span>
+    <div class="spacer"></div><button class="btn sm primary" onclick="userForm()">＋ 新建账号</button></div>
+    <div id="userForm"></div>`;
+
+  html += `<div class="card" style="padding:16px;margin-bottom:16px">
+    <div class="row wrap" style="gap:12px;align-items:flex-end">
+      <div style="flex:1;min-width:220px"><label class="mut" style="display:block;margin-bottom:6px">前台访问密码 ${frontReady ? '<span class="pill ok">已设置</span>' : '<span class="pill err">未设置</span>'}</label>
+        <input id="frontNewPw" class="input" type="password" placeholder="至少 6 位，改了之后旧的立刻失效"></div>
+      <button class="btn primary" onclick="saveFrontPw()">保存前台密码</button>
+    </div>
+    <div class="mut" style="margin-top:8px">前台访客只拿到 90 天的只读凭证，能看目录、播放、下载；上传/删除/账号/日志一律 403。</div>
+  </div>`;
+
+  html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+    <th>用户名</th><th>角色</th><th>前台</th><th>创建时间</th><th></th></tr></thead><tbody>`;
+  for (const u of users) {
+    html += `<tr><td><b>${esc(u.username)}</b></td>
+      <td>${u.role === 'admin' ? '<span class="pill acc">管理员</span>' : '<span class="pill">访客</span>'}</td>
+      <td>${u.front_enabled ? '<span class="pill ok">允许</span>' : '<span class="pill">禁止</span>'}</td>
+      <td class="mut">${when(u.created_at)}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn sm ghost" onclick="userPw(${u.id})">改密码</button>
+        <button class="btn sm ghost" onclick="userToggle(${u.id},${u.front_enabled ? 0 : 1})">${u.front_enabled ? '禁前台' : '开前台'}</button>
+        <button class="btn sm danger" onclick="userDel(${u.id})">删除</button>
+      </td></tr>`;
+  }
+  html += '</tbody></table></div>';
+  $('#view').innerHTML = html;
+}
+function userForm() {
+  $('#userForm').innerHTML = `<div class="card" style="padding:16px;margin-bottom:14px">
+    <div class="row wrap" style="gap:12px;align-items:flex-end">
+      <div style="flex:1;min-width:160px"><div class="field"><label>用户名</label><input id="uName" class="input"></div></div>
+      <div style="flex:1;min-width:160px"><div class="field"><label>密码</label><input id="uPw" class="input" type="password"></div></div>
+      <div style="width:150px"><div class="field"><label>角色</label><select id="uRole" class="input"><option value="user">前台访客</option><option value="admin">管理员</option></select></div></div>
+      <button class="btn primary" onclick="userCreate()">创建</button>
+      <button class="btn ghost" onclick="$('#userForm').innerHTML=''">取消</button>
+    </div></div>`;
+}
+async function userCreate() {
+  try {
+    await api('/api/users', { method: 'POST', body: JSON.stringify({ username: $('#uName').value, password: $('#uPw').value, role: $('#uRole').value }) });
+    toast('已创建', 'ok'); renderUsers();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function userPw(id) {
+  const pw = prompt('新密码（至少 6 位）'); if (!pw) return;
+  try { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ password: pw }) }); toast('已改', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function userToggle(id, on) { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ front_enabled: on }) }); renderUsers(); }
+async function userDel(id) {
+  if (!confirm('删除这个用户？')) return;
+  try { await api(`/api/users/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); renderUsers(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function saveFrontPw() {
+  const pw = $('#frontNewPw').value;
+  if (!pw || pw.length < 6) return toast('至少 6 位', 'err');
+  try { await api('/api/front/password', { method: 'POST', body: JSON.stringify({ password: pw }) }); toast('前台密码已更新', 'ok'); renderUsers(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- 访问日志 ---------- */
+async function renderVisits() {
+  const d = await api('/api/visits?limit=120&summary=1');
+  crumb([{ t: '访问日志' }]);
+  let html = `<div class="page-h"><h2>访问日志</h2>
+    <span class="sub">保留 ${d.keepDays} 天 · 每 15 天自动清理${d.lastPrune ? ' · 上次 ' + when(d.lastPrune) : ''}</span>
+    <div class="spacer"></div><button class="btn sm" onclick="pruneNow()">立即清理</button></div>`;
+  html += `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div class="row wrap"><span class="pill acc">你的 IP：${esc(d.ip)}</span>
+    <span class="pill">${esc(d.country || '—')}</span>
+    <span class="mut">记录所有 /api 请求，含登录与失败尝试</span></div></div>`;
+
+  if (d.summary?.length) {
+    html += `<div class="card" style="overflow:auto;margin-bottom:16px"><table class="tb"><thead><tr>
+      <th>IP</th><th>次数</th><th>地区</th><th>最近</th><th>状态</th></tr></thead><tbody>`;
+    for (const s of d.summary) {
+      html += `<tr><td class="mono">${esc(s.ip)}${s.ip === d.ip ? ' <span class="pill acc">你</span>' : ''}</td>
+        <td>${s.n}</td><td class="mut">${esc([s.country, s.city].filter(Boolean).join(' ') || '—')}</td>
+        <td class="mut">${when(s.last)}</td><td class="mut">${(s.statuses || []).join(' / ')}</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+
+  html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+    <th>时间</th><th>IP</th><th>方法</th><th>路径</th><th>状态</th><th>用户</th></tr></thead><tbody>`;
+  for (const v of d.visits) {
+    html += `<tr><td class="mut" style="white-space:nowrap">${when(v.created_at)}</td>
+      <td class="mono">${esc(v.ip)}</td><td class="mut">${esc(v.method)}</td>
+      <td class="mono" style="max-width:380px;overflow:hidden;text-overflow:ellipsis">${esc(v.path)}</td>
+      <td>${v.status < 400 ? `<span class="pill ok">${v.status}</span>` : v.status < 500 ? `<span class="pill warn">${v.status}</span>` : `<span class="pill err">${v.status}</span>`}</td>
+      <td class="mut">${esc(v.username || (v.uid ? '#' + v.uid : '—'))}</td></tr>`;
+  }
+  html += '</tbody></table></div>';
+  $('#view').innerHTML = html;
+}
+async function pruneNow() {
+  const days = prompt('保留最近多少天？', '15'); if (!days) return;
+  try { const r = await api('/api/visits/prune', { method: 'POST', body: JSON.stringify({ days: Number(days) }) }); toast(`清掉 ${r.removed} 条`, 'ok'); renderVisits(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- 我的账号 ---------- */
+async function renderAccount() {
+  const lk = await api('/api/locks').catch(() => null);
+  crumb([{ t: '我的账号' }]);
+  $('#view').innerHTML = `
+    <div class="page-h"><h2>我的账号</h2><span class="sub">${esc(state.user?.name || '')}</span></div>
+    <div class="card" style="padding:18px;max-width:520px;margin-bottom:16px">
+      <div class="field"><label>当前密码</label><input id="pwOld" class="input" type="password"></div>
+      <div class="field"><label>新密码（至少 8 位）</label><input id="pwNew" class="input" type="password"></div>
+      <div class="field"><label>确认新密码</label><input id="pwNew2" class="input" type="password"></div>
+      <button class="btn primary" onclick="savePw()">保存</button>
+    </div>
+    <div class="card" style="padding:18px">
+      <div class="mut" style="margin-bottom:10px">登录保护</div>
+      <div class="row wrap">
+        <span class="pill ${lk?.account?.locked ? 'err' : 'ok'}">账号：${lk?.account?.fails || 0} / ${lk?.maxAccount || 5} 次</span>
+        <span class="pill ${lk?.ip?.locked ? 'err' : 'ok'}">IP：${lk?.ip?.fails || 0} / ${lk?.maxIp || 100} 次</span>
+      </div>
+      <div class="mut" style="margin-top:8px">失败达上限锁 10 分钟。账号 5 次就锁，同一 IP 累计 100 次才锁（共享出口不误伤）。</div>
+    </div>`;
+}
+async function savePw() {
+  const a = $('#pwOld').value, b = $('#pwNew').value, c = $('#pwNew2').value;
+  if (b !== c) return toast('两次新密码不一致', 'err');
+  try { await api('/api/password', { method: 'POST', body: JSON.stringify({ oldPassword: a, newPassword: b }) }); toast('密码已改', 'ok'); $('#pwOld').value = $('#pwNew').value = $('#pwNew2').value = ''; }
+  catch (e) { toast(e.message, 'err'); }
 }
 
 boot();

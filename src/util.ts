@@ -40,6 +40,29 @@ export function cookie(name: string, value: string, maxAge: number): string {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
+export class Need extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** 设置表的读写（settings: 键值对） */
+export async function getSetting(env: { DB: D1Database }, key: string): Promise<string | null> {
+  const r = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<any>();
+  return r?.value ?? null;
+}
+
+export async function setSetting(env: { DB: D1Database }, key: string, value: string): Promise<void> {
+  await env.DB.prepare(
+    'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+  )
+    .bind(key, value, nowISO())
+    .run();
+}
+
 export function nowISO(): string {
   return new Date().toISOString();
 }

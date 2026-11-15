@@ -5,8 +5,46 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
   pass_hash TEXT NOT NULL,                 -- pbkdf2$迭代$salt$hash
-  role TEXT NOT NULL DEFAULT 'admin',      -- admin | user
+  role TEXT NOT NULL DEFAULT 'admin',      -- admin=后台管理员 | user=前台访客
+  front_enabled INTEGER NOT NULL DEFAULT 1, -- 前台账号是否允许访问
   created_at TEXT NOT NULL
+);
+
+-- 在线表格：结构化数据存 D1，不进 R2
+CREATE TABLE IF NOT EXISTS sheets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  rows INTEGER NOT NULL DEFAULT 30,
+  cols INTEGER NOT NULL DEFAULT 12,
+  folder_id INTEGER NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sheets_folder ON sheets(folder_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS sheet_cells (
+  sheet_id TEXT NOT NULL,
+  r INTEGER NOT NULL,
+  c INTEGER NOT NULL,
+  v TEXT NOT NULL,
+  PRIMARY KEY (sheet_id, r, c)
+);
+
+-- 在线文档：文本 / Markdown / 代码
+CREATE TABLE IF NOT EXISTS docs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  folder_id INTEGER NULL,
+  content TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_docs_folder ON docs(folder_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 -- 账号池：每个 Cloudflare 账号一个 R2 桶（也可同账号多桶）

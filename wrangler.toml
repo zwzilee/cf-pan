@@ -6,7 +6,7 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 workers_dev = true
 
-# 前端静态文件（可选：也可用 Pages 单独托管 web/）
+# 前端静态文件（也可用 Pages 单独托管 web/）
 [assets]
 directory = "./web"
 binding = "ASSETS"
@@ -16,9 +16,14 @@ PUBLIC_APP_NAME = "PAN R2"
 # 首次部署：管理员账号，形如 "admin:你的密码"。建议用环境变量 BOOTSTRAP_ADMIN 传入
 # （npm run deploy:env），建好管理员后保持空字符串，别把真实密码写进这个文件
 BOOTSTRAP_ADMIN = ""
+# 访问日志（1/未设=开，0=关）
+LOG_VISITS = "1"
+# 日志保留天数（定时任务每 15 天清一次，超过这么久就删）
+VISIT_KEEP_DAYS = "15"
 # JWT 签名密钥请用 secret 设置，不要写在这里：
 #   npx wrangler secret put JWT_SECRET
-#   npx wrangler secret put MASTER_KEY   # 可选：加密账号密钥，强烈建议
+#   npx wrangler secret put MASTER_KEY     # 可选：加密账号密钥，强烈建议
+#   npx wrangler secret put PUBLIC_SECRET  # 前台访客凭证签名（不配则用 JWT_SECRET）
 
 [[d1_databases]]
 binding = "DB"
@@ -28,6 +33,10 @@ database_id = "REPLACE_WITH_D1_ID"
 [[kv_namespaces]]
 binding = "KV"
 id = "REPLACE_WITH_KV_ID"
+
+# 定时清理访问日志：每 15 天一次（每月 1 日和 16 日 04:00 UTC）
+[triggers]
+crons = ["0 4 1,16 * *"]
 
 [observability]
 enabled = true
