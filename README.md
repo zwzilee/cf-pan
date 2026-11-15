@@ -501,7 +501,10 @@ curl -X POST https://<你的域名>/api/accounts \
 | 账户（Account） | Account Settings: Read | wrangler 启动时要读账号设置 |
 | 账户（Account） | Workers KV Storage: Edit | 绑定 KV（`wrangler.toml` 里有 KV） |
 | 账户（Account） | D1: Edit | 绑定 D1（`wrangler.toml` 里有 D1） |
+| 账户（Account） | **Workers R2 Storage: Edit**（Read + Write） | 网盘本体就是 R2；缺这条时 `wrangler deploy` 可能报绑定校验失败，生成 S3 凭证的页面也用不了 |
 | 区域（Zone，限定到 `kids.us.ci`） | Workers Routes: Edit | 部署时同步自定义域名路由（若路由是你在控制台手加的，可省） |
+
+> 别只给 Workers Scripts——R2 是这个项目的数据面，只给 Workers 权限时部署脚本能传上去，但一旦涉及 R2 绑定检查 / 建 R2 凭证就会 401。最小但完整的组合是上表六条。
 
 控制台建法：`My Profile → API Tokens → Create Token → Custom token`，按上表加权限；账户资源选你的账号，Zone 资源只选 `kids.us.ci`（不要选 all zones）。
 
@@ -517,7 +520,9 @@ curl -X POST https://<你的域名>/api/accounts \
         { "id": "e086da7e2179491d91ee5f35b3ca210a" },
         { "id": "c1fde68c7bcc44588cbb6ddbc16d6480" },
         { "id": "09b2857d1c31407795e75e3fed8617a1" },
-        { "id": "f7f0eda5697f475c90846e879bab8666" }
+        { "id": "f7f0eda5697f475c90846e879bab8666" },
+        { "id": "b4992e1108244f5d8bfbd5744320c2e1" },
+        { "id": "bf7481a1826f439697cb59a20b22293e" }
       ] },
     { "effect": "allow",
       "resources": { "com.cloudflare.api.account.zone.<ZONE_ID>": "*" },
