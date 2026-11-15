@@ -486,10 +486,12 @@ async function go(view, opts = {}) {
     if (view === 'tokens') return await renderTokens();
     if (view === 'telegram') return await renderTelegram();
     if (view === 'visits') return await renderVisits();
+    if (view === 'dav') return await renderDav();
     if (view === 'account') return await renderAccount();
     if (view === 'player') return await renderPlayer(opts.id);
     if (view === 'sheet') return await renderSheetEditor(opts.id);
     if (view === 'doc') return await renderDocEditor(opts.id);
+    v.innerHTML = `<div class="card" style="padding:22px"><b>未知页面：${esc(view)}</b></div>`;
   } catch (e) {
     v.innerHTML = `<div class="card" style="padding:22px"><b style="color:#ffb0b3">出错了</b><div class="mut" style="margin-top:6px">${esc(e.message)}</div></div>`;
   }
