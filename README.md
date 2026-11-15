@@ -465,6 +465,33 @@ curl -X POST https://<你的域名>/api/accounts \
 
 然后在「用户与密码」页设一个**前台访问密码**（可以和后台不同），把域名 + 这个密码发给朋友，他们就能只读浏览。
 
+### 方式三：push 自动部署（CI）
+
+仓库里已经放好 `.github/workflows/deploy.yml`：往 `main` 推一次 → `npm ci` + `tsc --noEmit` + `npx wrangler deploy`，全自动。私库一样能跑。
+
+**它依赖两样东西，缺一不可：**
+
+1. **仓库 Secrets**：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`。
+   - `Settings → Secrets and variables → Actions → New repository secret`，两个都加上。
+   - `CLOUDFLARE_API_TOKEN` 要能部署 Workers（权限 `Account → Workers Scripts: Edit`）；`CLOUDFLARE_ACCOUNT_ID` 是账号 ID（控制台右侧那串 hex）。
+   - `wrangler.toml` 里已经写了真实的 D1 / KV id，所以 workflow 不用再传 `D1_DATABASE_ID` / `KV_NAMESPACE_ID`；`JWT_SECRET` / `MASTER_KEY` 是 Worker 上的 secret，`wrangler deploy` 不会覆盖，部署后依然在。
+2. **这个 GitHub 账号的 Actions 是开着的**。GitHub 有个账号级开关，关掉时所有仓库的 workflow 都不跑，API 直接回：
+   ```
+   {"message":"Actions has been disabled for this user.","status":"422"}
+   ```
+   去 `github.com/settings` → 侧栏 **Actions → General** 确认允许；组织/企业账号还要看组织策略有没有禁。没开时 `Actions` 标签页会显示 "Workflows aren't being run on this repository"。
+
+   > 实测记录：`ikiiing` 这个账号当前 Actions 被平台禁用（`GET /repos/.../actions/permissions/access` 返回 `access_level: "none"`，手动 dispatch 也 422）。所以这套 workflow 现在推上去不会触发，得先在 GitHub 账号设置里把 Actions 打开。
+
+**不想用 GitHub Actions 就用 Cloudflare 原生的 Workers Builds**（不经过 GitHub Actions，走 Cloudflare 自己的 GitHub App）：
+
+1. `dash.cloudflare.com` → Workers & Pages → 点 `pan-r2` → **Settings → Builds → Connect**。
+2. 选 GitHub → 授权 `Cloudflare Workers and Pages` App（私库要在 App 的 Repository access 里勾上 `CF-R2PAN`）→ 选仓库、分支 `main`。
+3. 构建命令留空（本项目无构建步骤，前端是单文件），部署命令填 `npx wrangler deploy`。
+4. 保存后 push 到 `main` 由 Cloudflare 自动构建部署，日志在 Worker 的 **Deployments / Builds** 里看。
+
+区别：GitHub Actions 用你仓库自己的 Secrets、在 GitHub 跑；Workers Builds 在 Cloudflare 侧跑、绑定沿用现有 Worker，连 id 都不用填，但要在控制台点一次授权。
+
 ### 能不能用 CF 环境变量改掉 `REPLACE_WITH_D1_ID` / `REPLACE_WITH_KV_ID` / `BOOTSTRAP_ADMIN`？
 
 分两类，答案不一样：
