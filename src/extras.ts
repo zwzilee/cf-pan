@@ -56,15 +56,17 @@ export async function restoreHandler(req: Request, env: any): Promise<Response> 
   const id = String(b.id || '');
   if (!id) throw new HttpError(400, '缺 id');
   if (kind === 'folder') {
-    // 恢复整个子树
+    // 只还原「跟这次删除同一批」的东西：早先被单独删掉的，不该被顺带复活
+    const rootRow = await env.DB.prepare('SELECT deleted_at FROM folders WHERE id = ?').bind(Number(id)).first();
+    const stamp = rootRow ? rootRow.deleted_at : null;
     const ids: number[] = [Number(id)];
     for (let i = 0; i < ids.length; i++) {
       const { results } = await env.DB.prepare('SELECT id FROM folders WHERE parent_id = ?').bind(ids[i]).all();
       for (const r of results as any[]) ids.push(Number(r.id));
     }
     for (const x of ids) {
-      await env.DB.prepare('UPDATE folders SET deleted_at = NULL WHERE id = ?').bind(x).run();
-      await env.DB.prepare('UPDATE files SET deleted_at = NULL WHERE folder_id = ?').bind(x).run();
+      await env.DB.prepare('UPDATE folders SET deleted_at = NULL WHERE id = ? AND deleted_at IS ?').bind(x, stamp).run();
+      await env.DB.prepare('UPDATE files SET deleted_at = NULL WHERE folder_id = ? AND deleted_at IS ?').bind(x, stamp).run();
     }
     return json({ ok: true, folders: ids.length });
   }

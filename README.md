@@ -762,7 +762,7 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 ### 回收站
 
-删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。**目录删除也走软删**（整棵子树一起进回收站，能还原）。回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。统计、目录树、WebDAV 列表都只看 `deleted_at IS NULL` 的部分。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
+删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。**目录删除也走软删**（整棵子树一起进回收站，能还原）。回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。还原是**按批次**的：`deleted_at` 时间戳相同才一起复活——先单独删掉的文件，不会因为后来还原整个目录而被顺带捞回来。统计、目录树、WebDAV 列表都只看 `deleted_at IS NULL` 的部分。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
 
 ### 缩略图与相册
 
