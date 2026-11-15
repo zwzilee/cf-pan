@@ -7,10 +7,9 @@ export class HttpError extends Error {
 }
 
 export function json(data: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(data), {
-    ...init,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', ...(init.headers || {}) },
-  });
+  const h = new Headers(init.headers as any);
+  if (!h.has('Content-Type')) h.set('Content-Type', 'application/json; charset=utf-8');
+  return new Response(JSON.stringify(data), { ...init, headers: h });
 }
 
 /** bytes -> base64url（无填充） */
@@ -36,8 +35,10 @@ export function getCookie(req: Request, name: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/** expires 传 0 表示立刻过期（登出清 Cookie），不依赖 Max-Age 的浏览器兼容性 */
 export function cookie(name: string, value: string, maxAge: number): string {
-  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  const exp = maxAge > 0 ? new Date(Date.now() + maxAge * 1000).toUTCString() : 'Thu, 01 Jan 1970 00:00:00 GMT';
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Expires=${exp}`;
 }
 
 export class Need extends Error {

@@ -62,6 +62,17 @@ button,input,select,textarea{font:inherit;color:inherit}
 .toast.ok{border-left-color:var(--ok)} .toast.err{border-left-color:var(--err)}
 @keyframes slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
 
+/* ---------- 页内对话框（替代原生 prompt/confirm） ---------- */
+.mask{position:fixed;inset:0;background:rgba(4,7,12,.72);backdrop-filter:blur(3px);
+  display:grid;place-items:center;z-index:9998;padding:20px;animation:fade .15s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.dlg{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line2);border-radius:16px;
+  padding:20px 22px;box-shadow:var(--shadow)}
+.dlg h3{margin:0 0 6px;font-size:15px}
+.dlg p{margin:0 0 14px;color:var(--mut);font-size:12.5px;line-height:1.6;word-break:break-all}
+.dlg input{width:100%;margin-bottom:14px}
+.dlg .foot{display:flex;gap:10px;justify-content:flex-end}
+
 /* ---------- 登录 ---------- */
 .login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px;
   background:radial-gradient(900px 500px at 50% -15%,#152murky 0%,transparent 60%),
@@ -158,6 +169,7 @@ table.grid th.corner{position:sticky;left:0;top:0;z-index:4;width:42px;min-width
 table.grid td input{width:100%;height:27px;border:0;background:transparent;padding:0 7px;outline:none;font-size:12.5px}
 table.grid td input:focus{box-shadow:inset 0 0 0 2px var(--acc);background:#0b1524}
 table.grid td.sel{background:#152238}
+table.grid td input.fx{color:#8fd0ff;font-weight:600}
 
 /* ---------- 文档编辑器 ---------- */
 .doc-split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -194,6 +206,7 @@ table.grid td.sel{background:#152238}
 }
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55}
 </style>
+<script src="/sheet-eval.js"></script>
 </head>
 <body>
 
@@ -271,6 +284,40 @@ table.grid td.sel{background:#152238}
 const $ = (s) => document.querySelector(s);
 const el = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstElementChild; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ---------- 页内对话框（不用原生 prompt/confirm，原生弹窗会把整个页面卡住） ---------- */
+function dlg({ title, desc = '', value = null, placeholder = '', ok = '确定', danger = false }) {
+  return new Promise((resolve) => {
+    const input = value === null ? '' : `<input class="inp" id="dlgIn" value="${esc(value)}" placeholder="${esc(placeholder)}">`;
+    const box = el(`<div class="mask">
+      <div class="dlg">
+        <h3>${esc(title)}</h3>${desc ? `<p>${esc(desc)}</p>` : ''}${input}
+        <div class="foot">
+          <button class="btn sm" id="dlgNo">取消</button>
+          <button class="btn sm ${danger ? 'danger' : 'primary'}" id="dlgYes">${esc(ok)}</button>
+        </div>
+      </div></div>`);
+    const done = (v) => { box.remove(); document.removeEventListener('keydown', key); resolve(v); };
+    const key = (e) => {
+      if (e.key === 'Escape') done(null);
+      if (e.key === 'Enter' && box.querySelector('#dlgIn')) done(box.querySelector('#dlgIn').value.trim() || null);
+    };
+    document.body.appendChild(box);
+    document.addEventListener('keydown', key);
+    box.addEventListener('click', (e) => { if (e.target === box) done(null); });
+    box.querySelector('#dlgNo').onclick = () => done(null);
+    box.querySelector('#dlgYes').onclick = () => {
+      const i = box.querySelector('#dlgIn');
+      done(i ? (i.value.trim() || null) : value === null ? null : true);
+    };
+    const i = box.querySelector('#dlgIn');
+    if (i) { i.focus(); i.select(); }
+    else box.querySelector('#dlgYes').focus();
+  });
+}
+async function ask(title, opts = {}) { return await dlg({ title, ok: '确定', ...opts }); }
+async function askText(title, desc, value, placeholder, ok = '确定') { return await dlg({ title, desc, value: value ?? '', placeholder, ok }); }
+async function confirmDlg(title, desc = '') { return (await dlg({ title, desc, danger: true, ok: '确定' })) !== null; }
 
 const state = {
   user: null, can: {}, mode: 'front',
@@ -587,23 +634,23 @@ async function renderPlayer(id) {
 
 /* ---------- 文件操作 ---------- */
 async function newFolder() {
-  const name = prompt('新目录名');
+  const name = await askText('新建目录', '', '', '目录名');
   if (!name) return;
   await api('/api/folders', { method: 'POST', body: JSON.stringify({ name, parentId: state.folder }) });
   toast('目录已建', 'ok'); go('files');
 }
 async function renameFolder(id, old) {
-  const name = prompt('改名为', old); if (!name || name === old) return;
+  const name = await askText('重命名目录', '', old, '目录名'); if (!name || name === old) return;
   await api(`/api/folders/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
   go('files');
 }
 async function delFolder(id) {
-  if (!confirm('删除这个目录？目录里必须没有文件。')) return;
+  if (!(await confirmDlg('删除目录', '目录里必须没有文件，否则会被拒绝。'))) return;
   try { await api(`/api/folders/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
   catch (e) { toast(e.message, 'err'); }
 }
 async function delFile(id) {
-  if (!confirm('删除文件？会同时清掉所有分片。')) return;
+  if (!(await confirmDlg('删除文件', '会同时清掉它在各个账号上的所有分片，无法恢复。'))) return;
   try { await api(`/api/files/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
   catch (e) { toast(e.message, 'err'); }
 }
@@ -616,21 +663,21 @@ async function shareFile(id) {
   } catch (e) { toast(e.message, 'err'); }
 }
 async function newSheet() {
-  const name = prompt('表格名', '未命名表格'); if (!name) return;
+  const name = await askText('新建表格', '行列随时可以加', '未命名表格', '表格名'); if (!name) return;
   const r = await api('/api/sheets', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
   openSheet(r.id);
 }
 async function delSheet(id) {
-  if (!confirm('删除这张表？')) return;
+  if (!(await confirmDlg('删除表格', '这张表的全部单元格都会被清掉。'))) return;
   await api(`/api/sheets/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files');
 }
 async function newDoc() {
-  const name = prompt('文档名（.md 会按 Markdown 渲染）', '未命名.md'); if (!name) return;
+  const name = await askText('新建文档', 'Markdown 语法，.md 会渲染成网页', '未命名.md', '文档名'); if (!name) return;
   const r = await api('/api/docs', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
   openDoc(r.id);
 }
 async function delDoc(id) {
-  if (!confirm('删除这份文档？')) return;
+  if (!(await confirmDlg('删除文档', '这篇文档的内容会一起删掉。'))) return;
   await api(`/api/docs/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files');
 }
 
@@ -757,18 +804,40 @@ async function renderSheetEditor(id) {
     for (let r = 0; r < rows; r++) {
       h += `<tr><th class="rowh">${r + 1}</th>`;
       for (let c = 0; c < cols; c++) {
-        const v = map.get(`${r},${c}`) ?? '';
-        h += `<td><input data-r="${r}" data-c="${c}" value="${esc(v)}" ${readOnly ? 'readonly' : ''}></td>`;
+        const raw = map.get(`${r},${c}`) ?? '';
+        const isF = raw.charAt(0) === '=';
+        const shown = isF ? (window.SheetEval ? window.SheetEval.displayValue(map, r, c) : raw) : raw;
+        h += `<td><input data-r="${r}" data-c="${c}" data-f="${isF ? esc(raw) : ''}" value="${esc(shown)}" class="${isF ? 'fx' : ''}" ${readOnly ? 'readonly' : ''}></td>`;
       }
       h += '</tr>';
     }
     t.innerHTML = h;
-    t.querySelectorAll('input').forEach((inp) => {
-      inp.onchange = () => {
+    const inputs = [...t.querySelectorAll('input')];
+    const commit = (inp) => {
+      const k = `${inp.dataset.r},${inp.dataset.c}`;
+      if (inp.value === '') map.delete(k); else map.set(k, inp.value);
+    };
+    // 重算所有「不在编辑中」的公式格显示值
+    const refresh = () => {
+      for (const inp of inputs) {
+        if (inp === document.activeElement) continue;
         const k = `${inp.dataset.r},${inp.dataset.c}`;
-        if (inp.value === '') map.delete(k); else map.set(k, inp.value);
-      };
-    });
+        const raw = map.get(k) ?? '';
+        if (raw.charAt(0) === '=') {
+          inp.dataset.f = raw; inp.classList.add('fx');
+          inp.value = window.SheetEval ? window.SheetEval.displayValue(map, +inp.dataset.r, +inp.dataset.c) : raw;
+        } else {
+          inp.dataset.f = ''; inp.classList.remove('fx'); inp.value = raw;
+        }
+      }
+    };
+    for (const inp of inputs) {
+      inp.addEventListener('focus', () => { if (inp.dataset.f) inp.value = inp.dataset.f; });
+      inp.addEventListener('input', () => commit(inp));
+      inp.addEventListener('change', () => commit(inp));
+      inp.addEventListener('blur', () => { commit(inp); refresh(); });
+    }
+    draw.refresh = refresh;
   }
   draw();
 
@@ -776,7 +845,7 @@ async function renderSheetEditor(id) {
   window.sheetAddCol = () => { cols++; draw(); };
   window.sheetSave = async () => {
     const cells = [...map.entries()].map(([k, v]) => { const [r, c] = k.split(',').map(Number); return { r, c, v }; });
-    try { await api(`/api/sheets/${id}/save`, { method: 'POST', body: JSON.stringify({ rows, cols, cells }) }); toast('已保存', 'ok'); }
+    try { await api(`/api/sheets/${id}/save`, { method: 'POST', body: JSON.stringify({ rows, cols, cells }) }); toast('已保存', 'ok'); if (draw.refresh) draw.refresh(); }
     catch (e) { toast(e.message, 'err'); }
   };
   window.sheetImport = async (inp) => {
@@ -930,12 +999,12 @@ async function accTest(id) {
 }
 async function accToggle(id, on) { await api(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled: on }) }); renderAccounts(); }
 async function accCap(id, cur) {
-  const gb = prompt('新容量 (GB)', (cur / 1024 ** 3).toFixed(0)); if (!gb) return;
+  const gb = await askText('改容量上限', '这是你给这个账号记的账，单位 GB', String(Math.round(cur / 1024 ** 3)), '例如 10'); if (!gb) return;
   await api(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify({ capacity_bytes: Math.round(Number(gb) * 1024 ** 3) }) });
   renderAccounts();
 }
 async function accDel(id) {
-  if (!confirm('移除这个账号？上面还有分片时会拒绝。')) return;
+  if (!(await confirmDlg('移除账号', '上面还有分片时会拒绝，先把文件删掉。'))) return;
   try { await api(`/api/accounts/${id}`, { method: 'DELETE' }); toast('已移除', 'ok'); renderAccounts(); }
   catch (e) { toast(e.message, 'err'); }
 }
@@ -960,7 +1029,7 @@ async function renderShares() {
   $('#view').innerHTML = html;
 }
 async function revokeShare(jti) {
-  if (!confirm('撤销这条分享？')) return;
+  if (!(await confirmDlg('撤销分享', '这个链接立刻失效，已经发出去的也打不开。'))) return;
   await api(`/api/shares/${jti}`, { method: 'DELETE' }); toast('已撤销', 'ok'); renderShares();
 }
 
@@ -1014,13 +1083,13 @@ async function userCreate() {
   } catch (e) { toast(e.message, 'err'); }
 }
 async function userPw(id) {
-  const pw = prompt('新密码（至少 6 位）'); if (!pw) return;
+  const pw = await askText('为用户设新密码', '至少 6 位', '', '新密码'); if (!pw) return;
   try { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ password: pw }) }); toast('已改', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 }
 async function userToggle(id, on) { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ front_enabled: on }) }); renderUsers(); }
 async function userDel(id) {
-  if (!confirm('删除这个用户？')) return;
+  if (!(await confirmDlg('删除用户', '删掉之后这个账号立刻失效。'))) return;
   try { await api(`/api/users/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); renderUsers(); }
   catch (e) { toast(e.message, 'err'); }
 }
@@ -1067,7 +1136,7 @@ async function renderVisits() {
   $('#view').innerHTML = html;
 }
 async function pruneNow() {
-  const days = prompt('保留最近多少天？', '15'); if (!days) return;
+  const days = await askText('清理访问日志', '保留最近多少天，更早的会立刻删掉', '15', '天数'); if (!days) return;
   try { const r = await api('/api/visits/prune', { method: 'POST', body: JSON.stringify({ days: Number(days) }) }); toast(`清掉 ${r.removed} 条`, 'ok'); renderVisits(); }
   catch (e) { toast(e.message, 'err'); }
 }

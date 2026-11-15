@@ -86,7 +86,9 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === '/api/front/login' && m === 'POST') return await frontLogin(req, env);
   if (p === '/api/password' && m === 'POST') return await changePassword(req, env);
   if (p === '/api/logout' && m === 'POST') {
-    return json({ ok: true }, { headers: { 'Set-Cookie': clearAuthCookies().join(', ') } });
+    const res = json({ ok: true });
+    for (const c of clearAuthCookies()) res.headers.append('Set-Cookie', c);
+    return res;
   }
 
   // ================= 身份 =================
