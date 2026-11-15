@@ -780,6 +780,10 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 文件行前面的勾选框 → 底部浮动条：删除 / 移动到当前目录 / 打标签 / 打包下载。后端 `POST /api/batch {op:'delete'|'move'|'tag', ids}`；`/api/move`、`/api/copy` 各自带目录自嵌套检测。
 
+### 在线解压（`POST /api/files/:id/unzip`）
+
+服务器端读 zip 的中央目录，把每个条目取出来写进网盘：**store 与 deflate 两种压缩都支持**（deflate 走 Workers 的 `DecompressionStream('deflate-raw')`），目录结构原样建出来，`__MACOSX/`、`.DS_Store`、`._` 开头的条目自动跳过。上限 64MB 整包（内存与子请求决定），rar/7z 不支持。文件行上 `.zip` 会有「解压」按钮。
+
 ### 打包下载（`GET /api/zip?ids=`）
 
 服务端手写 store（不压缩）zip：local header + central directory + EOCD，逐片从 R2 拉出来直接写进流，不在内存里攒整包。**上限 64MB 总量 / 50 个文件**——这是 Worker 内存与子请求数决定的，再大请用客户端逐个下。
