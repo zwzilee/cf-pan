@@ -6,6 +6,8 @@ export interface Env {
   MASTER_KEY?: string;
   PUBLIC_APP_NAME?: string;
   BOOTSTRAP_ADMIN?: string;
+  /** 访问日志开关，'0' 关（默认开） */
+  LOG_VISITS?: string;
 }
 
 /** 账号池里的一条记录（secret 已解密为明文） */

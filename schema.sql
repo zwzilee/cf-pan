@@ -69,6 +69,24 @@ CREATE TABLE IF NOT EXISTS chunks (
   UNIQUE(file_id, idx)
 );
 
+-- 访问日志：每个 /api/* 请求一条，后台「访问」页看最近谁来过
+CREATE TABLE IF NOT EXISTS visits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip TEXT NOT NULL,                  -- CF-Connecting-IP
+  country TEXT,                      -- request.cf.country
+  city TEXT,                         -- request.cf.city
+  ua TEXT,                           -- User-Agent（截断 300）
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,                -- pathname + query（截断 300）
+  status INTEGER NOT NULL,
+  uid INTEGER,                       -- 已登录时记用户 id
+  username TEXT,
+  referer TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id, idx);
 CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);
 CREATE INDEX IF NOT EXISTS idx_accounts_enabled ON accounts(enabled);
+CREATE INDEX IF NOT EXISTS idx_visits_created ON visits(id DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_ip ON visits(ip, id DESC);

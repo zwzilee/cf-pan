@@ -6,81 +6,110 @@ import * as store from './store';
 import * as s3 from './s3';
 import { completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, streamDownload } from './chunk';
 import { checkShareUsable, createShareToken, revokeShare, verifyShareToken } from './share';
-import { checkLoginAllowed, clearLoginFailures, clientIp, MAX_FAILS, recordLoginFailure } from './ratelimit';
+import { checkLoginAllowed, clearLoginFailures, clientIp, recordLoginFailure } from './ratelimit';
+import { listVisits, logVisit, lockStatus, pruneVisits, summarizeVisits } from './visit';
 
 const SESSION_TTL = 60 * 60 * 12; // 12h
 
+/** 本次请求解析出来的用户，给访问日志用 */
+let currentUser: { uid: number; username?: string } | null = null;
+
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    currentUser = null;
+    let res: Response;
     try {
-      const url = new URL(req.url);
-      const p = url.pathname;
-      const m = req.method;
-      const seg = p.split('/').filter(Boolean);
-
-      // ================= 公开分享（免登录，必须在鉴权之前） =================
-      if (seg[0] === 's' && seg[1]) return await publicShare(req, env, seg[1], seg[2]);
-      if (p === '/api/public/info' && m === 'GET') return await publicInfo(req, env);
-
-      // ================= 认证 =================
-      if (p === '/api/login' && m === 'POST') return await login(req, env);
-      if (p === '/api/logout' && m === 'POST')
-        return json({ ok: true }, { headers: { 'Set-Cookie': cookie('sid', '', 0) } });
-      if (p === '/api/me' && m === 'GET') {
-        const u = await requireAuth(req, env);
-        return json({ ok: true, user: { uid: u.uid, role: u.role } });
-      }
-      if (p === '/api/stats' && m === 'GET') return await stats(req, env);
-      if (p === '/api/password' && m === 'POST') return await changePassword(req, env);
-
-      // ================= 账号池（管理员） =================
-      if (p === '/api/accounts' && m === 'GET') return await listAccountsHandler(req, env);
-      if (p === '/api/accounts' && m === 'POST') return await createAccountHandler(req, env);
-      if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && seg[3] === 'test' && m === 'POST')
-        return await testAccountHandler(req, env, Number(seg[2]));
-      if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && m === 'PATCH')
-        return await updateAccountHandler(req, env, Number(seg[2]));
-      if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && m === 'DELETE')
-        return await deleteAccountHandler(req, env, Number(seg[2]));
-
-      // ================= 目录 / 文件 =================
-      if (p === '/api/folders' && m === 'GET') return await listFolders(req, env);
-      if (p === '/api/folders' && m === 'POST') return await createFolder(req, env);
-      if (p === '/api/files' && m === 'GET') return await listFiles(req, env);
-
-      // ================= 分享管理 =================
-      if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'share' && m === 'POST')
-        return await createShareHandler(req, env, seg[2]);
-      if (p === '/api/shares' && m === 'GET') return await listSharesHandler(req, env);
-      if (seg[0] === 'api' && seg[1] === 'shares' && seg[2] && m === 'DELETE')
-        return await revokeShareHandler(req, env, seg[2]);
-
-      // ================= 分片上传 =================
-      if (p === '/api/upload/init' && m === 'POST') return await initHandler(req, env);
-      if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'chunk' && seg[4] && m === 'PUT')
-        return await putChunkHandler(req, env, seg[2], Number(seg[4]));
-      if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'complete' && m === 'POST')
-        return await completeHandler(req, env, seg[2]);
-
-      // ================= 下载 / 删除 =================
-      if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'download' && m === 'GET')
-        return await download(req, env, seg[2]);
-      if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'play' && m === 'GET')
-        return await play(req, env, seg[2]);
-      if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && m === 'DELETE')
-        return await deleteFile(req, env, seg[2]);
-
-      if (p === '/api/health') return json({ ok: true, name: env.PUBLIC_APP_NAME || 'PAN R2' });
-
-      // ================= 静态前端 =================
-      if (env.ASSETS && !p.startsWith('/api/')) return env.ASSETS.fetch(req);
-      return json({ error: 'Not Found' }, { status: 404 });
+      res = await route(req, env);
     } catch (e: any) {
-      if (e instanceof HttpError) return json({ error: e.message }, { status: e.status });
-      return json({ error: e?.message || String(e) }, { status: 500 });
+      res = e instanceof HttpError
+        ? json({ error: e.message }, { status: e.status })
+        : json({ error: e?.message || String(e) }, { status: 500 });
     }
+
+    // 访问日志：IP 在鉴权前就读得到；写库异步做，不拖慢响应
+    const p = new URL(req.url).pathname;
+    if (env.LOG_VISITS !== '0' && p.startsWith('/api/') && p !== '/api/visits') {
+      const task = logVisit(env, req, res, currentUser);
+      if (ctx?.waitUntil) ctx.waitUntil(task);
+      else await task;
+    }
+    return res;
   },
 };
+
+async function route(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+  const p = url.pathname;
+  const m = req.method;
+  const seg = p.split('/').filter(Boolean);
+
+  // ================= 公开分享（免登录，必须在鉴权之前） =================
+  if (seg[0] === 's' && seg[1]) return await publicShare(req, env, seg[1], seg[2]);
+  if (p === '/api/public/info' && m === 'GET') return await publicInfo(req, env);
+
+  // ================= 认证 =================
+  if (p === '/api/login' && m === 'POST') return await login(req, env);
+  if (p === '/api/logout' && m === 'POST') {
+    currentUser = null;
+    return json({ ok: true }, { headers: { 'Set-Cookie': cookie('sid', '', 0) } });
+  }
+  if (p === '/api/me' && m === 'GET') {
+    const u = await requireAuth(req, env);
+    const row = await env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(u.uid).first<any>();
+    currentUser = { uid: u.uid, username: row?.username };
+    return json({ ok: true, user: { uid: u.uid, role: u.role } });
+  }
+  if (p === '/api/stats' && m === 'GET') return await stats(req, env);
+  if (p === '/api/password' && m === 'POST') return await changePassword(req, env);
+
+  // ================= 访问日志 / 登录锁（管理员） =================
+  if (p === '/api/visits' && m === 'GET') return await visitsHandler(req, env);
+  if (p === '/api/visits/prune' && m === 'POST') return await pruneHandler(req, env);
+  if (p === '/api/locks' && m === 'GET') return await locksHandler(req, env);
+
+  // ================= 账号池（管理员） =================
+  if (p === '/api/accounts' && m === 'GET') return await listAccountsHandler(req, env);
+  if (p === '/api/accounts' && m === 'POST') return await createAccountHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && seg[3] === 'test' && m === 'POST')
+    return await testAccountHandler(req, env, Number(seg[2]));
+  if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && m === 'PATCH')
+    return await updateAccountHandler(req, env, Number(seg[2]));
+  if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && m === 'DELETE')
+    return await deleteAccountHandler(req, env, Number(seg[2]));
+
+  // ================= 目录 / 文件 =================
+  if (p === '/api/folders' && m === 'GET') return await listFolders(req, env);
+  if (p === '/api/folders' && m === 'POST') return await createFolder(req, env);
+  if (p === '/api/files' && m === 'GET') return await listFiles(req, env);
+
+  // ================= 分享管理 =================
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'share' && m === 'POST')
+    return await createShareHandler(req, env, seg[2]);
+  if (p === '/api/shares' && m === 'GET') return await listSharesHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'shares' && seg[2] && m === 'DELETE')
+    return await revokeShareHandler(req, env, seg[2]);
+
+  // ================= 分片上传 =================
+  if (p === '/api/upload/init' && m === 'POST') return await initHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'chunk' && seg[4] && m === 'PUT')
+    return await putChunkHandler(req, env, seg[2], Number(seg[4]));
+  if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'complete' && m === 'POST')
+    return await completeHandler(req, env, seg[2]);
+
+  // ================= 下载 / 删除 =================
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'download' && m === 'GET')
+    return await download(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'play' && m === 'GET')
+    return await play(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && m === 'DELETE')
+    return await deleteFile(req, env, seg[2]);
+
+  if (p === '/api/health') return json({ ok: true, name: env.PUBLIC_APP_NAME || 'PAN R2' });
+
+  // ================= 静态前端 =================
+  if (env.ASSETS && !p.startsWith('/api/')) return env.ASSETS.fetch(req);
+  return json({ error: 'Not Found' }, { status: 404 });
+}
 
 // ============ 认证 ============
 async function ensureBootstrap(env: Env): Promise<void> {
@@ -120,6 +149,7 @@ async function login(req: Request, env: Env): Promise<Response> {
   }
 
   await clearLoginFailures(env, username);
+  currentUser = { uid: user.id, username: user.username };
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL;
   const token = await signJWT({ uid: user.id, role: user.role, exp }, env.JWT_SECRET);
   return json({ ok: true, role: user.role }, { headers: { 'Set-Cookie': cookie('sid', token, SESSION_TTL) } });
@@ -134,29 +164,62 @@ async function changePassword(req: Request, env: Env): Promise<Response> {
   if (!newPw || newPw.length < 8) throw new HttpError(400, '新密码至少 8 位');
   if (!oldPw) throw new HttpError(400, '要填旧密码');
 
+  currentUser = { uid: me.uid };
   const gate = await checkLoginAllowed(env, me.username || '', clientIp(req));
   if (gate.locked) throw new HttpError(429, `试错次数过多，${Math.ceil(gate.retryAfter / 60)} 分钟后再试`);
 
   const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(me.uid).first<any>();
   if (!user) throw new HttpError(401, '会话用户不存在');
   if (!(await verifyPassword(oldPw, user.pass_hash))) {
-    const ip = clientIp(req);
-    const { left } = await recordLoginFailure(env, user.username, ip);
+    const { left } = await recordLoginFailure(env, user.username, clientIp(req));
     throw new HttpError(403, left > 0 ? `旧密码不对，还可试 ${left} 次` : '旧密码错误次数过多，已锁定 10 分钟');
   }
 
   const hash = await hashPassword(newPw);
   await env.DB.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').bind(hash, me.uid).run();
+  await clearLoginFailures(env, user.username);
 
-  // 换完密码重签会话，其它设备上的旧 cookie 到期后作废（同一 secret，所以只能靠重新登录）
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL;
   const token = await signJWT({ uid: user.id, role: user.role, exp }, env.JWT_SECRET);
   return json({ ok: true }, { headers: { 'Set-Cookie': cookie('sid', token, SESSION_TTL) } });
 }
 
+// ============ 访问日志 / 登录锁 ============
+async function visitsHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAuth(req, env, 'admin');
+  currentUser = { uid: me.uid };
+  const url = new URL(req.url);
+  const limit = Number(url.searchParams.get('limit') || 100);
+  const offset = Number(url.searchParams.get('offset') || 0);
+  const wantSummary = url.searchParams.get('summary') === '1';
+  const rows = await listVisits(env, limit, offset);
+  const summary = wantSummary ? await summarizeVisits(env, 1000) : [];
+  return json({ visits: rows, summary, ip: clientIp(req), country: (req as any).cf?.country ?? null });
+}
+
+async function pruneHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAuth(req, env, 'admin');
+  currentUser = { uid: me.uid };
+  const b = (await req.json().catch(() => ({}))) as any;
+  const days = Number(b.days || 30);
+  const removed = await pruneVisits(env, days);
+  return json({ ok: true, removed, days });
+}
+
+async function locksHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAuth(req, env, 'admin');
+  currentUser = { uid: me.uid };
+  const url = new URL(req.url);
+  const username = url.searchParams.get('u') || me.username || '';
+  const ip = url.searchParams.get('ip') || clientIp(req);
+  const st = await lockStatus(env, username, ip);
+  return json({ ok: true, username, ip, ...st });
+}
+
 // ============ 统计 ============
 async function stats(req: Request, env: Env): Promise<Response> {
-  await requireAuth(req, env);
+  const me = await requireAuth(req, env);
+  currentUser = { uid: me.uid, username: me.username };
   const acc = await env.DB.prepare(
     'SELECT COUNT(*) AS n, COALESCE(SUM(capacity_bytes),0) AS cap, COALESCE(SUM(used_bytes),0) AS used FROM accounts WHERE enabled = 1',
   ).first<any>();
