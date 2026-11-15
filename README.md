@@ -525,6 +525,25 @@ GitHub 有个**账号级**开关，关掉时所有仓库的 workflow 都不触�
 - 部署成功但打不开：先手动 `curl https://<你的域名>/api/health`，再检查 `wrangler.toml` 里的 D1/KV id 是不是对应当前账号。
 
 
+### 自定义域名 / 路由
+
+把 Worker 挂到自己域名上，有两种常见形态：
+
+**A. 域名就在本账号下（最简单）**：`Workers & Pages → pan-r2 → Settings → Domains & Routes → Add → Custom Domain`，填 `pan.example.com`，Cloudflare 会自动加 DNS 记录并签发证书。
+
+**B. 走 SaaS 回源（本仓库线上用的就是这种）**：`pan.kids.us.ci` 这个域名如果不在 Worker 所在账号，就用「CNAME 指向一个 SaaS 回源地址 + Worker 路由」的组合：
+
+1. **Worker 路由**：`Workers & Pages → pan-r2 → Settings → Triggers → Routes → Add route`，填 `pan.kids.us.ci/*`，选 `pan-r2`。等价 API：
+   ```bash
+   curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/workers/routes" \
+     -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"pattern":"pan.kids.us.ci/*","script":"pan-r2"}'
+   ```
+2. **DNS 加一条 CNAME**（在 `kids.us.ci` 的 DNS 管理里）：`pan` → `saas.sin.fan`，**代理状态关掉（灰色小云 / DNS only，`proxied=false`）**，TTL 自动。
+3. 等一两分钟 DNS 生效，`curl https://pan.kids.us.ci/api/health` 应回 `{"ok":true,...}`。
+
+> 灰云（DNS only）也能用，是因为 `saas.sin.fan` 本身就是 Cloudflare for SaaS 的回源入口，请求最终仍回到 CF 边缘，再由上面的 Worker 路由接管。所以这条 CNAME 必须是灰云、不能开黄云，否则会和 SaaS 回源打架。
+
 ### 能不能用 CF 环境变量改掉 `REPLACE_WITH_D1_ID` / `REPLACE_WITH_KV_ID` / `BOOTSTRAP_ADMIN`？
 
 分两类，答案不一样：
