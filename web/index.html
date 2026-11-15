@@ -78,9 +78,9 @@ button,input,select,textarea{font:inherit;color:inherit}
 .login-foot{margin-top:18px;text-align:center;color:var(--mut2);font-size:11.5px;line-height:1.9}
 
 /* ---------- 外壳 ---------- */
-.shell{display:flex;min-height:100vh}
+.shell{display:flex;height:100vh;overflow:hidden}
 .side{width:238px;flex:0 0 238px;background:var(--bg2);border-right:1px solid var(--line);
-  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  display:flex;flex-direction:column;height:100%;overflow:hidden}
 .brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px}
 .brand .mk{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:17px;
   background:linear-gradient(140deg,#2a4a92,#1a2743);border:1px solid #2c3f66}
@@ -96,13 +96,13 @@ button,input,select,textarea{font:inherit;color:inherit}
 .me{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;background:#111826}
 .avatar{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-size:12px;font-weight:700;
   background:linear-gradient(140deg,#37528c,#22304d);color:#cfe0ff}
-.main{flex:1;min-width:0;display:flex;flex-direction:column}
-.top{height:56px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line);
-  background:rgba(10,13,19,.86);backdrop-filter:blur(10px);position:sticky;top:0;z-index:20}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;height:100%;overflow:hidden}
+.top{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line);
+  background:rgba(10,13,19,.86);backdrop-filter:blur(10px);position:relative;z-index:20}
 .crumb{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut);overflow:hidden;white-space:nowrap}
 .crumb b{color:var(--fg);font-weight:600}
 .crumb span.sep{color:var(--mut2)}
-.content{padding:22px 24px 80px;flex:1}
+.content{padding:22px 24px 40px;flex:1;min-height:0;overflow:auto}
 .page-h{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
 .page-h h2{font-size:17px;margin:0}
 .page-h .sub{color:var(--mut);font-size:12px}

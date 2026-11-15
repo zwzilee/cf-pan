@@ -76,21 +76,35 @@ export async function listVisits(env: Env, limit = 100, offset = 0): Promise<Vis
 
 /** 聚合：按 IP 统计最近 N 条里的次数、首次/末次时间 */
 export async function summarizeVisits(env: Env, window = 1000): Promise<
-  { ip: string; hits: number; last: string; country: string | null; agents: number }[]
+  { ip: string; n: number; last: string; country: string | null; city: string | null; statuses: number[]; agents: number }[]
 > {
   const { results } = await env.DB.prepare(
     `SELECT ip,
-            COUNT(*) AS hits,
+            COUNT(*) AS n,
             MAX(created_at) AS last,
             MAX(country) AS country,
+            MAX(city) AS city,
+            GROUP_CONCAT(DISTINCT status) AS codes,
             COUNT(DISTINCT ua) AS agents
        FROM (SELECT * FROM visits ORDER BY id DESC LIMIT ?)
       GROUP BY ip
-      ORDER BY hits DESC, last DESC`,
+      ORDER BY n DESC, last DESC`,
   )
     .bind(Math.min(Math.max(window, 1), 5000))
     .all<any>();
-  return results as any;
+  return results.map((r) => ({
+    ip: r.ip,
+    n: r.n,
+    last: r.last,
+    country: r.country ?? null,
+    city: r.city ?? null,
+    statuses: String(r.codes ?? '')
+      .split(',')
+      .map(Number)
+      .filter((x) => !Number.isNaN(x))
+      .sort((a, b) => a - b),
+    agents: r.agents,
+  }));
 }
 
 /** 清掉超过 days 天的记录，返回删了多少行 */
