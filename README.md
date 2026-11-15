@@ -91,6 +91,22 @@ pan-r2/
 - `putChunk` 先 `reserveBytes` 占额再上传，失败回滚，避免超额。
 - 同一个 `idx` 重复 PUT 会被 `UNIQUE(file_id,idx)` 挡住，直接返回 skipped —— 天然续传。
 
+### 内容寻址去重（一份内容只存一次）
+
+每片落盘前先算 `sha256(内容)`，拿它当主键查 `blobs` 表：
+
+```
+PUT chunk  ──▶ sha256(body) ──▶ blobs 里有这个 hash？
+                                  ├─ 有 → refs+1，chunks 指向已有对象，一个字节都不写
+                                  └─ 无 → 挑最空账号 PUT 到 b/<前2位>/<hash>，插 blobs(refs=1)
+```
+
+- 对象键不再按 `u/<uploadId>/<idx>` 命名，改成 `b/<hash 前两位>/<hash>` —— 同样内容永远同一个键，天然幂等。
+- 存 10 份同一部电影：R2 里只有一份，`used` 只涨一份。`/api/stats` 返回 `dedupSaved = 名义体积 − 实际落盘`，页面顶部「♻️ 去重省下」就是这个数。
+- 删文件时**不直接删对象**，而是把 `blobs.refs` 减一；减到 0 才真删 R2 对象并退还配额。所以删 A 文件时如果 B 文件还引用着同一片，空间不会掉。
+- 分片边界影响命中率：同样内容只要有一片边界错开就整片都算新的。这也是分片大小要固定（同尺寸文件用同一个 chunkSize）的原因。
+- 老数据（去重上线前传的）`chunks.hash` 为 NULL，删除时走旧的「按 object_key 直删」分支，不影响。
+
 ---
 
 ## 五、下载 / Range 原理（chunk.ts: planRanges + streamDownload）
