@@ -124,6 +124,10 @@ pan-r2/
 │  ├─ sheet.ts            # 在线表格：稀疏单元格存 D1 + 自写公式求值器
 │  ├─ doc.ts              # 在线文档：Markdown 存 D1 + 极简渲染
 │  ├─ visit.ts            # 访问日志：落 D1、按 IP 聚合、按天清理
+│  ├─ tokens.ts           # API 令牌：sha256 存库、read/manage 两种范围
+│  ├─ tg.ts               # Telegram 上传渠道：webhook 收文件、分片入库
+│  ├─ dav.ts              # WebDAV 网关：目录挂载 + 临时密钥 + 全套 DAV 方法
+│  ├─ files.ts            # 文件删除：blob 引用计数回收 + 配额退还（面板/DAV 共用）
 │  └─ types.ts / util.ts
 └─ web/index.html         # 前端：单文件 SPA（登录 / 文件 / 上传 / 表格 / 文档 / 后台管理）
 ```
@@ -379,6 +383,68 @@ Telegram 有两条完全不同的限制，很容易搞混：
 5. 上限自动变成 2GB；要改可以在「单文件上限」里手填字节数（`0` = 自动）。
 
 之后 `getFile` / 下载 / `setWebhook` 全部改走你填的地址，代码里只有一处 `apiBase` 在切（`tgApi(..., cfg.apiBase)`）。
+
+---
+
+### WebDAV 挂载（`src/dav.ts`）
+
+把这个网盘里的**某一个目录**挂成标准 WebDAV，直接给 Windows 资源管理器、macOS Finder、nPlayer / Infuse / Documents、rclone、甚至 Emby 的媒体库连。每个挂载有自己的一条临时密钥，可以单独停用、删除、到期失效，不影响面板登录。
+
+**在后台怎么建**（侧栏「管理 → WebDAV」）：
+
+1. 想单独放一块就点右上「＋ 新建 WebDAV 文件夹」，它在网盘根目录建一个空文件夹。
+2. 「根目录」下拉选要挂出去的目录（默认「网盘根目录」= 整个盘）。
+3. 填名称、选有效期（1 天 / 7 天 / 30 天 / 永久），要防手滑就勾「只读」。
+4. 点「创建并生成密钥」——**密钥只显示这一次**，下面的大绿卡里有地址、用户名、密钥，各自一个「复制」按钮。
+
+**两种连接地址，任选**：
+
+```
+https://<你的域名>/dav/<挂载id>/            ← 需要 Basic 认证（用户名 dav，密码 = 密钥）
+https://<你的域名>/dav/<挂载id>/<密钥>/      ← 密钥写进路径，老客户端不支持 Basic 时用
+```
+
+客户端怎么填：
+
+| 客户端 | 操作 |
+|---|---|
+| Windows | 此电脑 → 映射网络驱动器 → 地址填 URL，用户名/密码填上面两格 |
+| macOS | Finder → 前往 → 连接服务器（⌘K）→ URL 同上 |
+| Android / iOS | nPlayer / Infuse / Documents 里选「WebDAV」，填 URL + 用户名 + 密码 |
+| rclone | `rclone config` → 新建 `webdav` → url 填 URL，vendor 选 `other`，user/pass 填两格 |
+| Emby / Jellyfin | 添加媒体库 → 网络共享 → WebDAV，同上 |
+
+**能做什么**：列目录、读、写、建目录、改名的全套标准方法都实现了 —— `OPTIONS / PROPFIND / GET / HEAD / PUT / MKCOL / DELETE / MOVE / COPY / LOCK / UNLOCK / PROPPATCH`。PUT 覆盖同名文件会走「删旧 + 重新落盘」，删文件沿用 blob 引用计数（同一份内容被别处引用着就不会真删）。
+
+**上限（平台决定的，不是配置）**：
+
+- **单次 PUT ≤ 95MB** —— Cloudflare Workers 请求体上限（Free/Pro 100MB）。超过会直接回 `413` 并提示改用分片上传。**读 / 下载 / 播放没有这个限制**（逐片流式拼接，2GB 的片也只占几十 KB 内存）。
+- 更大的文件：用面板拖拽上传，或 `POST /api/upload/init` 那套分片接口（见「API 令牌 → 用令牌上传三步」）。
+- 有些客户端（Windows 资源管理器）会对小文件也做 LOCK/UNLOCK，这里回的是假锁（不互斥），单用户够用；多人同时写同一文件不保证。
+
+**管理接口**（管理员，Cookie 或 Bearer 管理令牌都行）：
+
+```bash
+# 列出所有挂载
+curl -H "Authorization: Bearer $PAN_TOKEN" https://<域名>/api/dav
+
+# 新建（folderId 传 null = 网盘根；ttlSec 传 null = 永久）
+curl -X POST -H "Authorization: Bearer $PAN_TOKEN" -H "Content-Type: application/json" \
+     -d '{"name":"客厅电视","folderId":3,"ttlSec":604800,"readonly":false}' https://<域名>/api/dav
+# → {"id":"...","username":"dav","key":"wd_...","expires_at":"...","url":"https://<域名>/dav/<id>/"}
+
+# 重置密钥（旧密钥立刻失效，返回新 key）
+curl -X POST -H "Authorization: Bearer $PAN_TOKEN" https://<域名>/api/dav/<id>/regen
+
+# 停用 / 启用 / 改只读 / 改到期
+curl -X PATCH -H "Authorization: Bearer $PAN_TOKEN" -H "Content-Type: application/json" \
+     -d '{"enabled":false}' https://<域名>/api/dav/<id>
+
+# 删除
+curl -X DELETE -H "Authorization: Bearer $PAN_TOKEN" https://<域名>/api/dav/<id>
+```
+
+密钥在库里只存 `sha256`，明文只在创建 / 重置时返回一次；挂载停用或过期后请求一律 `403`，密钥不对是 `401`。
 
 ---
 
@@ -748,3 +814,12 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | GET | `/api/tg/info` | `getWebhookInfo` + 机器人用户名 |
 | POST | `/api/tg/register` \| `/api/tg/unregister` | 挂 / 摘 Webhook |
 | POST | `/api/tg/webhook/:secret` | **公开**，Telegram 回调入口 |
+| GET/POST | `/api/dav` | WebDAV 挂载列表 / 新建（返回一次性密钥） |
+| PATCH/DELETE | `/api/dav/:id` | 启停 / 改只读 / 改到期 / 删除挂载 |
+| POST | `/api/dav/:id/regen` | 重置挂载密钥（返回新 key） |
+
+WebDAV 网关本身（不用 Cookie，走 Basic 或路径里的密钥）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| ALL | `/dav/:mountId/*` | 标准 WebDAV：`OPTIONS / PROPFIND / GET / HEAD / PUT / MKCOL / DELETE / MOVE / COPY / LOCK / UNLOCK / PROPPATCH` |

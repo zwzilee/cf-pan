@@ -155,3 +155,19 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   created_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+
+CREATE TABLE IF NOT EXISTS dav_mounts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  folder_id INTEGER NULL,
+  username TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  readonly INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dav_mounts_hash ON dav_mounts(key_hash);
+CREATE INDEX IF NOT EXISTS idx_dav_mounts_folder ON dav_mounts(folder_id);

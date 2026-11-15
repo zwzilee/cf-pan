@@ -451,6 +451,7 @@ function renderNav() {
   if (c.shares) items.push({ k: 'shares', t: '分享', ic: '🔗', grp: '管理' });
   if (c.users) items.push({ k: 'users', t: '用户与密码', ic: '👤', grp: '管理' });
   if (c.tokens) items.push({ k: 'tokens', t: 'API 令牌', ic: '🎫', grp: '管理' });
+  if (c.dav) items.push({ k: 'dav', t: 'WebDAV', ic: '🗄️', grp: '管理' });
   if (c.telegram) items.push({ k: 'telegram', t: 'TG 上传', ic: '✈️', grp: '管理' });
   if (c.logs) items.push({ k: 'visits', t: '访问日志', ic: '📈', grp: '管理' });
   if (c.password) items.push({ k: 'account', t: '我的账号', ic: '⚙️', grp: '管理' });
@@ -1330,6 +1331,147 @@ async function tokenToggle(id, on) {
 async function tokenDel(id, name) {
   if (!(await confirmDlg('删除令牌', `「${name}」删掉后立即失效，无法恢复。`))) return;
   try { await api('/api/tokens/' + id, { method: 'DELETE' }); toast('已删除', 'ok'); newToken = null; renderTokens(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- WebDAV 挂载 ---------- */
+let davNew = null; // 刚创建/重置出来的 {url, username, key}
+async function renderDav() {
+  const d = await api('/api/dav');
+  const f = await api('/api/folders');
+  const byId = {};
+  for (const x of f.folders) byId[x.id] = x;
+  const pathOf = (id) => {
+    const parts = [];
+    let cur = byId[id], guard = 0;
+    while (cur && guard++ < 50) { parts.unshift(cur.name); cur = cur.parent_id ? byId[cur.parent_id] : null; }
+    return parts.join(' / ');
+  };
+  crumb([{ t: 'WebDAV' }]);
+
+  const fopts = ['<option value="root">网盘根目录</option>']
+    .concat(f.folders.map((x) => `<option value="${x.id}">${esc(pathOf(x.id))}</option>`))
+    .join('');
+
+  let html = `<div class="page-h"><h2>WebDAV</h2>
+    <span class="sub">把一个目录挂成 WebDAV，给播放器 / rclone / 资源管理器连</span>
+    <div class="spacer"></div>
+    <button class="btn" onclick="davNewFolder()">＋ 新建 WebDAV 文件夹</button></div>`;
+
+  html += `<div class="card" style="padding:18px;margin-bottom:14px">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px"><b>新建挂载</b>
+      <span class="mut">每个挂载一个独立密钥，只认这一条，随时可停用/删除</span></div>
+    <div class="row wrap" style="gap:10px;align-items:flex-end">
+      <div class="field" style="flex:1;min-width:160px"><label>名称</label>
+        <input id="davName" class="input" placeholder="例如 客厅电视 / 手机看图"></div>
+      <div class="field" style="flex:1;min-width:180px"><label>根目录</label>
+        <select id="davFolder" class="input">${fopts}</select></div>
+      <div class="field" style="width:130px"><label>有效期</label>
+        <select id="davTtl" class="input">
+          <option value="86400">1 天</option>
+          <option value="604800" selected>7 天</option>
+          <option value="2592000">30 天</option>
+          <option value="">永久</option>
+        </select></div>
+      <div class="field" style="width:auto"><label>&nbsp;</label>
+        <label class="row" style="gap:6px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="davRo" style="width:auto"> 只读</label></div>
+      <button class="btn primary" onclick="davCreate()">创建并生成密钥</button>
+    </div></div>`;
+
+  if (davNew) {
+    html += `<div class="card" style="padding:16px 18px;margin-bottom:14px;border-color:#2c5c3f">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <b style="color:#7ee0a3">挂载已就绪（密钥只显示这一次）</b></div>
+      <div class="field"><label>WebDAV 地址</label>
+        <div class="row" style="gap:8px"><input class="input mono" id="davUrl" value="${esc(davNew.url)}" readonly style="flex:1">
+        <button class="btn primary" onclick="copyDav('davUrl')">复制</button></div></div>
+      <div class="row wrap" style="gap:10px">
+        <div class="field" style="flex:1;min-width:150px"><label>用户名</label>
+          <div class="row" style="gap:8px"><input class="input mono" id="davUser" value="${esc(davNew.username)}" readonly style="flex:1">
+          <button class="btn" onclick="copyDav('davUser')">复制</button></div></div>
+        <div class="field" style="flex:2;min-width:220px"><label>密钥（当密码用）</label>
+          <div class="row" style="gap:8px"><input class="input mono" id="davKey" value="${esc(davNew.key)}" readonly style="flex:1">
+          <button class="btn primary" onclick="copyDav('davKey')">复制</button></div></div>
+      </div>
+      <div class="mut" style="margin-top:10px;line-height:1.8">
+        Windows：此电脑 → 映射网络驱动器，地址填上面那条 URL，用户名/密码填这两格<br>
+        macOS：Finder → 前往 → 连接服务器（⌘K），URL 同上<br>
+        Android／iOS：nPlayer、Infuse、Documents 里选「WebDAV」，填 URL + 用户名 + 密码<br>
+        rclone：<code>rclone config</code> → 选 <code>webdav</code> → url 填上面的，vendor 选 <code>other</code><br>
+        也可以把密钥直接写进地址：<code id="davUrlKey">${esc(davNew.url)}${esc(davNew.key)}/</code>
+        <button class="btn sm ghost" onclick="copyDav('davUrlKey')">复制这条</button>
+      </div>
+      <div class="mut" style="margin-top:8px;color:#e0b46a">单次 PUT 上限 95MB（Cloudflare 请求体限制）；更大的文件请用面板或 API 令牌分片上传。读/下载/播放没有这个限制。</div>
+      <div style="margin-top:10px"><button class="btn ghost" onclick="davNew=null;renderDav()">收起</button></div>
+    </div>`;
+  }
+
+  html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+    <th>名称</th><th>根目录</th><th>用户名</th><th>密钥</th><th>权限</th><th>状态</th><th>到期</th><th>最后使用</th><th></th></tr></thead><tbody>`;
+  if (!d.mounts.length) html += `<tr><td colspan="9" class="mut" style="padding:18px">还没有 WebDAV 挂载</td></tr>`;
+  for (const m of d.mounts) {
+    const expired = m.expires_at && Date.parse(m.expires_at) < Date.now();
+    const st = !m.enabled ? '<span class="pill err">停用</span>' : expired ? '<span class="pill warn">已过期</span>' : '<span class="pill ok">可用</span>';
+    html += `<tr>
+      <td><b>${esc(m.name)}</b></td>
+      <td class="mut">${m.folder_id ? esc(pathOf(m.folder_id)) : '网盘根目录'}</td>
+      <td class="mono mut">${esc(m.username)}</td>
+      <td class="mono mut">${esc(m.key_prefix)}…</td>
+      <td>${m.readonly ? '<span class="pill">只读</span>' : '<span class="pill acc">读写</span>'}</td>
+      <td>${st}</td>
+      <td class="mut">${m.expires_at ? when(m.expires_at) : '永久'}</td>
+      <td class="mut">${m.last_used_at ? when(m.last_used_at) : '—'}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn sm ghost" onclick="davRegen('${m.id}','${esc(m.name)}')">重置密钥</button>
+        <button class="btn sm ghost" onclick="davToggle('${m.id}',${m.enabled ? 0 : 1})">${m.enabled ? '停用' : '启用'}</button>
+        <button class="btn sm danger" onclick="davDel('${m.id}','${esc(m.name)}')">删除</button>
+      </td></tr>`;
+  }
+  html += '</tbody></table></div>';
+  $('#view').innerHTML = html;
+}
+function copyDav(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const v = el.value !== undefined && el.tagName === 'INPUT' ? el.value : el.textContent;
+  navigator.clipboard?.writeText(v).then(() => toast('已复制', 'ok'), () => toast('复制失败，手动选中', 'err'));
+}
+async function davCreate() {
+  const name = $('#davName').value.trim() || 'WebDAV';
+  const folderId = $('#davFolder').value || 'root';
+  const ttlRaw = $('#davTtl').value;
+  const ttlSec = ttlRaw === '' ? null : Number(ttlRaw);
+  const readonly = $('#davRo').checked;
+  try {
+    const r = await api('/api/dav', { method: 'POST', body: JSON.stringify({ name, folderId, ttlSec, readonly }) });
+    davNew = { url: r.url, username: r.username, key: r.key };
+    toast('已创建', 'ok');
+    renderDav();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function davNewFolder() {
+  const name = await askText('新建 WebDAV 文件夹', '会在网盘根目录下建一个空文件夹', '', '文件夹名');
+  if (!name) return;
+  try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ name }) }); toast('已创建', 'ok'); renderDav(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function davRegen(id, name) {
+  if (!(await confirmDlg('重置密钥', `「${name}」的旧密钥立即失效，用旧密钥的客户端要重新填。`))) return;
+  try {
+    const r = await api('/api/dav/' + id + '/regen', { method: 'POST' });
+    davNew = { url: r.url, username: 'dav', key: r.key };
+    toast('已重置', 'ok');
+    renderDav();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function davToggle(id, on) {
+  try { await api('/api/dav/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !!on }) }); renderDav(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function davDel(id, name) {
+  if (!(await confirmDlg('删除挂载', `「${name}」的密钥立即失效。网盘里的文件不会被删。`))) return;
+  try { await api('/api/dav/' + id, { method: 'DELETE' }); toast('已删除', 'ok'); davNew = null; renderDav(); }
   catch (e) { toast(e.message, 'err'); }
 }
 

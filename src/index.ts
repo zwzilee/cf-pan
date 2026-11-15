@@ -38,6 +38,8 @@ import {
   renameDoc,
   saveDoc,
 } from './doc';
+import { createMount, davEntry, deleteMount, getMount, listMounts, regenKey, updateMount } from './dav';
+import { deleteFileDeep } from './files';
 
 const SESSION_TTL = 60 * 60 * 12; // 后台会话 12h
 
@@ -104,6 +106,9 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   // TG 上传渠道 webhook（Telegram 来调，靠 URL 里的 secret 认身份）
   if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'webhook' && seg[3] && m === 'POST')
     return await tgWebhook(req, env, seg[3], ctx);
+
+  // ================= WebDAV 网关（自带 Basic / 密钥认证，不走 Cookie） =================
+  if (seg[0] === 'dav' && seg[1]) return await davEntry(req, env, seg[1], seg.slice(2));
 
   // ================= 身份 =================
   if (p === '/api/me' && m === 'GET') return await meHandler(req, env);
@@ -196,6 +201,16 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/tg/info' && m === 'GET') return await tgInfoHandler(req, env);
   if (p === '/api/tg/register' && m === 'POST') return await tgRegisterHandler(req, env);
   if (p === '/api/tg/unregister' && m === 'POST') return await tgUnregisterHandler(req, env);
+
+  // ================= 管理员：WebDAV 挂载 =================
+  if (p === '/api/dav' && m === 'GET') return await davListHandler(req, env);
+  if (p === '/api/dav' && m === 'POST') return await davCreateHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'dav' && seg[2] && seg[3] === 'regen' && m === 'POST')
+    return await davRegenHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'dav' && seg[2] && m === 'PATCH')
+    return await davUpdateHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'dav' && seg[2] && m === 'DELETE')
+    return await davDeleteHandler(req, env, seg[2]);
 
   // ================= 管理员：日志 / 锁 =================
   if (p === '/api/visits' && m === 'GET') return await visitsHandler(req, env);
@@ -307,7 +322,7 @@ async function meHandler(req: Request, env: Env): Promise<Response> {
   caps.read = true;
   if (isManager(a)) {
     caps.read = caps.write = caps.manage = caps.accounts = caps.users = caps.logs = true;
-    caps.password = caps.shares = caps.tokens = caps.telegram = true;
+    caps.password = caps.shares = caps.tokens = caps.telegram = caps.dav = true;
   }
   return json({
     ok: true,
@@ -333,6 +348,7 @@ function emptyCaps() {
     password: false,
     tokens: false,
     telegram: false,
+    dav: false,
   };
 }
 
@@ -920,56 +936,8 @@ async function serveFile(req: Request, env: Env, file: any, opts?: { inline?: bo
 async function deleteFile(req: Request, env: Env, id: string): Promise<Response> {
   const me = await requireAdmin(req, env);
   noteUser(me);
-  const { results: chunks } = await env.DB.prepare('SELECT * FROM chunks WHERE file_id = ?').bind(id).all<any>();
-  const accounts = await store.listAccounts(env);
-  const byId = new Map(accounts.map((a) => [a.id, a]));
-
-  // 先把每片的引用数减掉，收集归零的（同一份内容被别的文件共用时不能删）
-  const toDelete = new Set<string>();
-  for (const c of chunks) {
-    if (!c.hash) {
-      // 老数据（去重上线前传的）：没有 hash，直接按 object_key 删
-      const acct = byId.get(c.account_id);
-      if (acct) {
-        try {
-          await s3.s3Delete(acct, c.object_key);
-        } catch {
-          /* 单个分片删除失败不阻断，最多留垃圾 */
-        }
-        await store.reserveBytes(env, c.account_id, -c.size);
-      }
-      continue;
-    }
-    const b = await env.DB.prepare('SELECT * FROM blobs WHERE hash = ?').bind(c.hash).first<any>();
-    if (!b) continue;
-    const left = (b.refs || 1) - 1;
-    if (left > 0) {
-      await env.DB.prepare('UPDATE blobs SET refs = ? WHERE hash = ?').bind(left, c.hash).run();
-    } else {
-      toDelete.add(c.hash);
-    }
-  }
-
-  for (const hash of toDelete) {
-    const b = await env.DB.prepare('SELECT * FROM blobs WHERE hash = ?').bind(hash).first<any>();
-    if (!b) continue;
-    const acct = byId.get(b.account_id);
-    if (acct) {
-      try {
-        await s3.s3Delete(acct, b.object_key);
-      } catch {
-        /* 同上：失败留垃圾，下一次清理再试 */
-      }
-      await store.reserveBytes(env, b.account_id, -b.size);
-    }
-    await env.DB.prepare('DELETE FROM blobs WHERE hash = ?').bind(hash).run();
-  }
-
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(id),
-    env.DB.prepare('DELETE FROM files WHERE id = ?').bind(id),
-  ]);
-  return json({ ok: true, removed: chunks.length, blobsDeleted: toDelete.size });
+  const r = await deleteFileDeep(env, id);
+  return json({ ok: true, ...r });
 }
 
 // ============ 在线表格 ============
@@ -1151,6 +1119,64 @@ async function updateTokenHandler(req: Request, env: Env, id: string): Promise<R
 }
 
 // ============ Telegram 上传渠道 ============
+// ============ WebDAV 挂载（管理员） ============
+async function davListHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  return json({ mounts: await listMounts(env) });
+}
+
+async function davCreateHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const name = String(b.name || '').trim() || 'WebDAV';
+  let folderId: number | null = null;
+  if (b.folderId !== null && b.folderId !== undefined && b.folderId !== '' && b.folderId !== 'root') {
+    const n = Number(b.folderId);
+    if (!Number.isFinite(n)) throw new HttpError(400, '目录 id 不合法');
+    const f = await env.DB.prepare('SELECT id FROM folders WHERE id = ?').bind(n).first<any>();
+    if (!f) throw new HttpError(400, '所选目录不存在');
+    folderId = n;
+  }
+  const ttl = b.ttlSec === null || b.ttlSec === undefined || b.ttlSec === '' || b.ttlSec === 0 ? null : Number(b.ttlSec);
+  const r = await createMount(env, { name, folderId, ttlSec: Number.isFinite(ttl as number) ? (ttl as number) : null, readonly: !!b.readonly });
+  const origin = new URL(req.url).origin;
+  return json({ id: r.id, username: r.username, key: r.key, expires_at: r.expires_at, url: `${origin}/dav/${r.id}/` });
+}
+
+async function davRegenHandler(req: Request, env: Env, id: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const m = await getMount(env, id);
+  if (!m) throw new HttpError(404, '挂载不存在');
+  const r = await regenKey(env, id);
+  const origin = new URL(req.url).origin;
+  return json({ key: r.key, url: `${origin}/dav/${id}/` });
+}
+
+async function davUpdateHandler(req: Request, env: Env, id: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const m = await getMount(env, id);
+  if (!m) throw new HttpError(404, '挂载不存在');
+  const b = (await req.json().catch(() => ({}))) as any;
+  await updateMount(env, id, {
+    enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
+    readonly: typeof b.readonly === 'boolean' ? b.readonly : undefined,
+    name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined,
+    ttlSec: b.ttlSec === undefined ? undefined : b.ttlSec === null ? null : Number(b.ttlSec),
+  });
+  return json({ ok: true });
+}
+
+async function davDeleteHandler(req: Request, env: Env, id: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  await deleteMount(env, id);
+  return json({ ok: true });
+}
+
 function maskToken(t: string): string {
   if (!t) return '';
   const i = t.indexOf(':');
