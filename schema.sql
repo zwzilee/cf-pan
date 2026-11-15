@@ -93,11 +93,25 @@ CREATE TABLE IF NOT EXISTS files (
   created_at TEXT NOT NULL
 );
 
+-- 内容寻址：一个 sha256 只存一份，多个分片引用同一个对象（refs 计数）
+CREATE TABLE IF NOT EXISTS blobs (
+  hash TEXT PRIMARY KEY,              -- sha256(分片内容) 十六进制
+  size INTEGER NOT NULL,
+  account_id INTEGER NOT NULL,
+  bucket TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  etag TEXT,
+  refs INTEGER NOT NULL DEFAULT 1,    -- 有多少个分片在引用；归零才真删
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blobs_account ON blobs(account_id);
+
 -- 分片清单：file_id 上传中=uploads.id，完成后=files.id
 CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id TEXT NOT NULL,
   idx INTEGER NOT NULL,
+  hash TEXT,                          -- 指向 blobs.hash（去重用）
   account_id INTEGER NOT NULL,
   bucket TEXT NOT NULL,
   object_key TEXT NOT NULL,

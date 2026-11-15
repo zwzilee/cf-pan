@@ -510,6 +510,7 @@ function crumb(parts) {
 /* ---------- 统计条 ---------- */
 function statsHtml(s) {
   const pct = s.capacity ? Math.min(100, (s.used / s.capacity) * 100) : 0;
+  const saved = s.dedupSaved || 0;
   return `<div class="stats">
     <div class="stat"><div class="k">📁 文件</div><div class="v">${s.files}<small>个</small></div>
       <div class="mut" style="margin-top:4px">共 ${bytes(s.filesSize)}</div></div>
@@ -518,8 +519,8 @@ function statsHtml(s) {
     <div class="stat"><div class="k">💾 已用</div><div class="v">${bytes(s.used)}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
       <div class="mut" style="margin-top:6px">${pct.toFixed(1)}% 已占用</div></div>
-    <div class="stat"><div class="k">📊 表格 / 文档</div><div class="v">${s.folders ?? 0}<small>目录</small></div>
-      <div class="mut" style="margin-top:4px">在线编辑区</div></div>
+    <div class="stat"><div class="k">♻️ 去重省下</div><div class="v">${bytes(saved)}</div>
+      <div class="mut" style="margin-top:4px">${s.blobs ?? 0} 个内容块 · ${saved ? '重复文件不再占空间' : '还没有重复内容'}</div></div>
   </div>`;
 }
 
@@ -557,7 +558,7 @@ async function refreshStorage() {
   box.innerHTML = `<div class="srow">
       <div class="ring">${ringSvg(pct)}<div class="pct">${pctText(pct, used)}</div></div>
       <div class="stxt"><div class="u">${bytes(used)} / ${bytes(cap)}</div>
-        <div class="s">${s.accounts} 个账号 · ${s.files} 个文件</div></div>
+        <div class="s">${s.accounts} 个账号 · ${s.files} 个文件${s.dedupSaved ? ` · 去重省 ${bytes(s.dedupSaved)}` : ''}</div></div>
     </div>
     <div class="sbar"><i class="${hot}" style="width:${Math.max(cap ? pct : 0, used ? 0.8 : 0)}%"></i></div>`;
 }
@@ -805,18 +806,21 @@ async function uploadOne(file, onProgress) {
     body: JSON.stringify({ name: file.name, size: file.size, folderId: state.folder, chunkSize }),
   });
   let done = 0;
+  let saved = 0;
   const idxs = [...Array(chunksCount).keys()];
   const worker = async () => {
     while (idxs.length) {
       const i = idxs.shift();
       const buf = await file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize)).arrayBuffer();
-      await api(`/api/upload/${uploadId}/chunk/${i}`, { method: 'PUT', body: buf, headers: { 'Content-Type': 'application/octet-stream' } });
+      const r = await api(`/api/upload/${uploadId}/chunk/${i}`, { method: 'PUT', body: buf, headers: { 'Content-Type': 'application/octet-stream' } });
+      if (r && r.dedup) saved += r.saved || 0;
       done++;
       onProgress(Math.round((done / chunksCount) * 100));
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunksCount) }, worker));
   await api(`/api/upload/${uploadId}/complete`, { method: 'POST', body: '{}' });
+  if (saved > 0) toast(`命中去重，省了 ${bytes(saved)}`, 'ok');
 }
 
 /* ---------- 表格编辑器 ---------- */

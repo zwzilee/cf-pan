@@ -512,6 +512,7 @@ async function stats(req: Request, env: Env): Promise<Response> {
     "SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS size FROM files WHERE status = 'ready'",
   ).first<any>();
   const folders = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders').first<any>();
+  const blobs = await env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS size FROM blobs').first<any>();
   return json({
     accounts: acc.n,
     capacity: acc.cap,
@@ -519,6 +520,9 @@ async function stats(req: Request, env: Env): Promise<Response> {
     files: files.n,
     filesSize: files.size,
     folders: folders.n,
+    blobs: blobs.n,
+    // 去重省下的量：所有文件名义体积 - 实际落盘字节
+    dedupSaved: Math.max(0, (files.size || 0) - (acc.used || 0)),
   });
 }
 
@@ -919,22 +923,53 @@ async function deleteFile(req: Request, env: Env, id: string): Promise<Response>
   const { results: chunks } = await env.DB.prepare('SELECT * FROM chunks WHERE file_id = ?').bind(id).all<any>();
   const accounts = await store.listAccounts(env);
   const byId = new Map(accounts.map((a) => [a.id, a]));
+
+  // 先把每片的引用数减掉，收集归零的（同一份内容被别的文件共用时不能删）
+  const toDelete = new Set<string>();
   for (const c of chunks) {
-    const acct = byId.get(c.account_id);
-    if (acct) {
-      try {
-        await s3.s3Delete(acct, c.object_key);
-      } catch {
-        /* 单个分片删除失败不阻断，最多留垃圾 */
+    if (!c.hash) {
+      // 老数据（去重上线前传的）：没有 hash，直接按 object_key 删
+      const acct = byId.get(c.account_id);
+      if (acct) {
+        try {
+          await s3.s3Delete(acct, c.object_key);
+        } catch {
+          /* 单个分片删除失败不阻断，最多留垃圾 */
+        }
+        await store.reserveBytes(env, c.account_id, -c.size);
       }
-      await store.reserveBytes(env, c.account_id, -c.size);
+      continue;
+    }
+    const b = await env.DB.prepare('SELECT * FROM blobs WHERE hash = ?').bind(c.hash).first<any>();
+    if (!b) continue;
+    const left = (b.refs || 1) - 1;
+    if (left > 0) {
+      await env.DB.prepare('UPDATE blobs SET refs = ? WHERE hash = ?').bind(left, c.hash).run();
+    } else {
+      toDelete.add(c.hash);
     }
   }
+
+  for (const hash of toDelete) {
+    const b = await env.DB.prepare('SELECT * FROM blobs WHERE hash = ?').bind(hash).first<any>();
+    if (!b) continue;
+    const acct = byId.get(b.account_id);
+    if (acct) {
+      try {
+        await s3.s3Delete(acct, b.object_key);
+      } catch {
+        /* 同上：失败留垃圾，下一次清理再试 */
+      }
+      await store.reserveBytes(env, b.account_id, -b.size);
+    }
+    await env.DB.prepare('DELETE FROM blobs WHERE hash = ?').bind(hash).run();
+  }
+
   await env.DB.batch([
     env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(id),
     env.DB.prepare('DELETE FROM files WHERE id = ?').bind(id),
   ]);
-  return json({ ok: true, removed: chunks.length });
+  return json({ ok: true, removed: chunks.length, blobsDeleted: toDelete.size });
 }
 
 // ============ 在线表格 ============

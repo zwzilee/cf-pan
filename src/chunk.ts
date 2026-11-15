@@ -28,7 +28,20 @@ export async function initUpload(env: Env, args: InitArgs) {
   return { uploadId: id, chunkSize: cs, chunksCount: count };
 }
 
-/** 第二步：逐片上传。每片挑一个最空的账号落盘，幂等可续传 */
+/** sha256(内容) 的十六进制，内容寻址的主键 */
+export async function sha256hex(body: ArrayBuffer): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', body);
+  return Array.from(new Uint8Array(d))
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * 第二步：逐片上传。每片挑一个最空的账号落盘，幂等可续传。
+ *
+ * 内容寻址去重：先算 sha256，如果 blobs 里已经有这一片（同一份内容以前传过），
+ * 就不写 R2，只把 chunks 指向已有的对象并给 refs +1 —— 存 100 份同一部电影只占一份空间。
+ */
 export async function putChunk(env: Env, uploadId: string, idx: number, body: ArrayBuffer) {
   const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
   if (!up) throw new Error('上传会话不存在或已完成');
@@ -39,29 +52,48 @@ export async function putChunk(env: Env, uploadId: string, idx: number, body: Ar
     .first<any>();
   if (exist) return { ok: true, skipped: true, etag: exist.etag };
 
+  const hash = await sha256hex(body);
+  const size = body.byteLength;
+
+  // ① 命中已有内容 → 只加引用，不占新空间
+  const hit = await env.DB.prepare('SELECT * FROM blobs WHERE hash = ? AND size = ?').bind(hash, size).first<any>();
+  if (hit) {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE blobs SET refs = refs + 1 WHERE hash = ?').bind(hash),
+      env.DB.prepare(
+        'INSERT INTO chunks (file_id, idx, hash, account_id, bucket, object_key, size, etag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(uploadId, idx, hash, hit.account_id, hit.bucket, hit.object_key, size, hit.etag, nowISO()),
+    ]);
+    return { ok: true, dedup: true, hash, saved: size, etag: hit.etag };
+  }
+
+  // ② 没命中 → 正常落盘
   const accounts = await store.listAccounts(env, true);
   const acct = store.pickAccount(accounts);
-  const objectKey = `u/${uploadId}/${idx}`;
+  const objectKey = `b/${hash.slice(0, 2)}/${hash}`;
 
-  await store.reserveBytes(env, acct.id, body.byteLength); // 先占额
+  await store.reserveBytes(env, acct.id, size); // 先占额
   let etag = '';
   try {
     ({ etag } = await s3.s3Put(acct, objectKey, body));
   } catch (e) {
-    await store.reserveBytes(env, acct.id, -body.byteLength); // 回滚
+    await store.reserveBytes(env, acct.id, -size); // 回滚
     throw e;
   }
 
-  await env.DB.prepare(
-    'INSERT INTO chunks (file_id, idx, account_id, bucket, object_key, size, etag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  )
-    .bind(uploadId, idx, acct.id, acct.bucket, objectKey, body.byteLength, etag, nowISO())
-    .run();
+  await env.DB.batch([
+    env.DB.prepare(
+      'INSERT OR IGNORE INTO blobs (hash, size, account_id, bucket, object_key, etag, refs, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
+    ).bind(hash, size, acct.id, acct.bucket, objectKey, etag, nowISO()),
+    env.DB.prepare(
+      'INSERT INTO chunks (file_id, idx, hash, account_id, bucket, object_key, size, etag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(uploadId, idx, hash, acct.id, acct.bucket, objectKey, size, etag, nowISO()),
+  ]);
 
-  return { ok: true, account: acct.name, etag };
+  return { ok: true, account: acct.name, hash, etag };
 }
 
-/** 第三步：所有分片到齐后落元数据 */
+/** 第三步：所有分片到齐后落元数据（整文件 sha256 = 各片 hash 再喂一遍） */
 export async function completeUpload(env: Env, uploadId: string) {
   const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
   if (!up) throw new Error('上传会话不存在');
@@ -75,16 +107,22 @@ export async function completeUpload(env: Env, uploadId: string) {
   const total = chunks.reduce((s: number, c: any) => s + c.size, 0);
   if (total !== up.size) throw new Error(`文件大小不符：分片合计 ${total} != ${up.size}`);
 
+  let fileHash: string | null = null;
+  if (chunks.every((c: any) => typeof c.hash === 'string' && /^[0-9a-f]{64}$/.test(c.hash))) {
+    const joined = new TextEncoder().encode(chunks.map((c: any) => c.hash).join(''));
+    fileHash = await sha256hex(joined.buffer as ArrayBuffer);
+  }
+
   const fileId = crypto.randomUUID();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO files (id, name, folder_id, size, chunk_size, chunks_count, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'ready', ?)`,
-    ).bind(fileId, up.name, up.folder_id, up.size, up.chunk_size, up.chunks_count, nowISO()),
+      `INSERT INTO files (id, name, folder_id, size, chunk_size, chunks_count, status, sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+    ).bind(fileId, up.name, up.folder_id, up.size, up.chunk_size, up.chunks_count, fileHash, nowISO()),
     env.DB.prepare('UPDATE chunks SET file_id = ? WHERE file_id = ?').bind(fileId, uploadId),
     env.DB.prepare('DELETE FROM uploads WHERE id = ?').bind(uploadId),
   ]);
-  return { fileId };
+  return { fileId, sha256: fileHash };
 }
 
 export async function getChunks(env: Env, fileId: string): Promise<ChunkRow[]> {
