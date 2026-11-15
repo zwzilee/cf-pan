@@ -179,6 +179,8 @@ POST /repos/<owner>/<repo>/actions/workflows/<id>/dispatches
 | `LOG_VISITS` | var | 可选 | `0` 关闭访问日志 |
 | `VISIT_KEEP_DAYS` | var | 可选 | 日志保留天数，默认 15 |
 
+> **WebDAV / API 令牌 / 分享链接 / 在线表格文档都不需要额外的 Cloudflare 权限**：它们全在 Worker 里跑，数据落同一个 D1 + KV + R2。WebDAV 的「临时密钥」是本项目自己发的一条随机串（库里只存 `sha256`），跟 CF 的 API Token 完全无关，不用去控制台建任何东西，后台点一下就有。
+
 ---
 
 ## 七、反面清单（这些权限本项目用不到）
