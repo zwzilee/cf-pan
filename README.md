@@ -347,12 +347,30 @@ curl -s -X POST -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/upload/$UPLOAD_ID
 
 给自己的 Telegram 机器人发文件，文件自动落进网盘（`src/tg.ts`）。
 
-1. 找 `@BotFather` 建 bot，拿 token；后台「TG 上传」页填进去 → 保存（会自动生成 Webhook secret）。
+页面分两层，跟 WebDAV 页一个样式：
+
+**列表页（默认）** —— 上面是「新建通道」卡，下面是通道表格。
+
+| 列 | 含义 |
+| --- | --- |
+| 名称 | 通道名，随便起（例如「手机相册」） |
+| 上传目录 | 这个通道的文件落哪个网盘目录（选「网盘根目录」就是根） |
+| TG 用户名 | 给这个通道备注的 bot 用户名，可空，只做展示 |
+| 白名单 | 逗号分隔的 Chat ID；**留空 = 谁都不收** |
+| 状态 | 启用 / 停用（停用的通道收到的消息不落盘） |
+
+每行有「白名单 / 停用 / 启用 / 删除」；右上角是「＋ 新建 TG 文件夹」和「⚙️ 设置」。
+
+**设置页（点右上「⚙️ 设置」进，有「← 返回」）** —— Bot Token、Webhook、自定义 Bot API 地址。多白名单已经挪到每个通道自己的「白名单」里，设置页只管机器人本身。
+
+上手顺序：
+
+1. 找 `@BotFather` 建 bot，拿 token；「⚙️ 设置」里填进去 → 保存（会自动生成 Webhook secret）。
 2. 点「注册 Webhook」，等价于调用 Telegram `setWebhook` 把 `https://<worker>/api/tg/webhook/<secret>` 挂上。
-3. 在 Telegram 里给 bot 发**文档 / 视频 / 音频 / 语音 / 图片**；webhook 收到后 `getFile` → 下载 → `initUpload/putChunk/completeUpload` 落盘，再回一句「✅ 已存入网盘：文件名（大小）」。
-4. 填「允许的 Chat ID」（逗号分隔，**多白名单**）——不在名单里的 Chat ID 一律拒收；**留空 = 谁都不收**（第一次配的时候先给 bot 发一句，它会回你这个 chat 的 ID，照抄进来再加白名单）。
-5. 点「＋ 新建 TG 文件夹」一键在网盘根目录建一个落盘目录（默认名 `TG 上传`）并设好；也可以手填「落到哪个目录 ID」。
-6. 落盘规则：文件先落到上面那个 TG 文件夹，再按 **Chat ID 建一级子文件夹**（例如 `TG 上传/123456789/xxx.mp4`），不同人发的东西自然分开；子文件夹不存在会自动建。
+3. 回列表页「新建通道」：起个名、选上传目录、（可选）填 TG 用户名、填白名单 Chat ID，点「创建」。或者点「＋ 新建 TG 文件夹」一键在建目录的同时开好通道。
+4. 在 Telegram 里给 bot 发**文档 / 视频 / 音频 / 语音 / 图片**；webhook 收到后 `getFile` → 下载 → `initUpload/putChunk/completeUpload` 落盘，再回一句「✅ 已存入网盘：文件名（大小）」。
+5. 落盘规则：文件落到通道的「上传目录」下，再按 **Chat ID 建一级子文件夹**（例如 `TG 上传/123456789/xxx.mp4`），不同人发的东西自然分开；子文件夹不存在会自动建。
+6. 白名单是**多通道多白名单**：同一个 Chat ID 落在哪个通道，取决于哪个通道的白名单里有它（自上而下取第一个命中的启用通道）。哪个通道都不匹配就回一句「这个 Chat ID 不在任何通道的白名单里」，不落盘。不确定自己的 Chat ID？先给 bot 发一句，它会回给你。
 
 细节与限制：
 - webhook 路由是**公开**的（Telegram 来调），身份靠 URL 里的 `secret` 认；secret 不对直接 403。收到 update 后立即 200，真正的下载/落盘在 `ctx.waitUntil()` 里做，避免 Telegram 超时重投。
@@ -814,7 +832,9 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | GET | `/api/locks?u=&ip=` | 查某账号/IP 是否被锁 |
 | GET/POST | `/api/tokens` | API 令牌列表 / 新建（返回一次性明文） |
 | PATCH/DELETE | `/api/tokens/:id` | 启停 / 删除令牌 |
-| GET/POST | `/api/tg/config` | TG 渠道配置（`regenSecret` / `clearToken`） |
+| GET/POST | `/api/tg/channels` | TG 通道列表 / 新建通道（`name` `folderId` `botUsername` `allowedRaw`） |
+| PATCH/DELETE | `/api/tg/channels/:id` | 改名称/目录/白名单/启停、删除通道 |
+| GET/POST | `/api/tg/config` | TG 机器人配置（`regenSecret` / `clearToken`） |
 | GET | `/api/tg/info` | `getWebhookInfo` + 机器人用户名 |
 | POST | `/api/tg/register` \| `/api/tg/unregister` | 挂 / 摘 Webhook |
 | POST | `/api/tg/webhook/:secret` | **公开**，Telegram 回调入口 |

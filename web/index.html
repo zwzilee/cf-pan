@@ -1491,14 +1491,138 @@ async function davDel(id, name) {
 
 /* ---------- Telegram 上传渠道 ---------- */
 let tgCfg = null;
+let tgView = 'list';
 async function renderTelegram() {
   const d = await api('/api/tg/config');
   tgCfg = d.config;
+  if (tgView === 'settings') return renderTgSettings();
   crumb([{ t: 'TG 上传' }]);
+  const cd = await api('/api/tg/channels');
+  const chans = cd.channels || [];
+  const tr = await api('/api/folders');
+  const folders = tr.folders || [];
+  const fopts = ['<option value="root">网盘根目录</option>']
+    .concat(folders.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`))
+    .join('');
+  const rows = chans.length
+    ? chans.map((c) => {
+        const fname = c.folder_id
+          ? (folders.find((x) => x.id === c.folder_id) || {}).name || '#' + c.folder_id
+          : '网盘根目录';
+        return `<tr>
+          <td><b>${esc(c.name)}</b></td>
+          <td>${esc(fname)}</td>
+          <td class="mono">${esc(c.bot_username || '-')}</td>
+          <td class="mono">${c.allowed.length ? esc(c.allowed.join(', ')) : '<span class="mut">（空，谁都不收）</span>'}</td>
+          <td>${c.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill warn">停用</span>'}</td>
+          <td class="mut">${c.last_at ? when(c.last_at) : '-'}</td>
+          <td><div class="row" style="gap:6px;flex-wrap:wrap">
+            <button class="btn ghost sm" onclick="tgChanWhitelist('${c.id}')">白名单</button>
+            <button class="btn ghost sm" onclick="tgChanToggle('${c.id}',${c.enabled ? 0 : 1})">${c.enabled ? '停用' : '启用'}</button>
+            <button class="btn danger sm" onclick="tgChanDel('${c.id}','${esc(c.name)}')">删除</button>
+          </div></td></tr>`;
+      }).join('')
+    : '<tr><td colspan="7" class="mut">还没有通道。上面填个名称点「创建」，或点右上「＋ 新建 TG 文件夹」。</td></tr>';
+  $('#view').innerHTML = `
+    <div class="page-h"><h2>TG 上传</h2><span class="sub">每个通道 = 一个落盘目录 + 一份白名单；给机器人发文件自动存进来</span>
+      <div class="spacer"></div>
+      <button class="btn" onclick="tgNewFolder()">＋ 新建 TG 文件夹</button>
+      <button class="btn ghost" onclick="tgView='settings';renderTelegram()">⚙️ 设置</button></div>
+
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px"><b>新建通道</b>
+        <span class="pill ${tgCfg.botTokenSet ? 'ok' : 'warn'}">${tgCfg.botTokenSet ? 'Bot 已配置 ' + esc(tgCfg.botTokenMasked) : '还没配 Bot Token，点右上「⚙️ 设置」'}</span></div>
+      <div class="row wrap" style="gap:10px;align-items:flex-end">
+        <div class="field" style="flex:1;min-width:150px;margin:0"><label>名称</label><input id="tcName" class="input" placeholder="例如 手机相册"></div>
+        <div class="field" style="flex:1;min-width:150px;margin:0"><label>TG 用户名</label><input id="tcUser" class="input mono" placeholder="bot 用户名，可空"></div>
+        <div class="field" style="flex:1;min-width:170px;margin:0"><label>上传目录</label><select id="tcFolder" class="input">${fopts}</select></div>
+        <button class="btn primary" onclick="tgCreateChannel()">创建</button>
+      </div>
+      <div class="field" style="margin-top:10px"><label>白名单 Chat ID（逗号分隔，留空 = 谁都不收）</label>
+        <input id="tcAllowed" class="input mono" placeholder="123456789, -1001234567890"></div>
+      <div class="mut" style="margin-top:8px">上传的文件会落到「上传目录」下按 Chat ID 建的子文件夹。不知道 Chat ID？先给 bot 发一句，它会回给你。</div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="tb"><thead><tr><th>名称</th><th>上传目录</th><th>TG 用户名</th><th>白名单</th><th>状态</th><th>最后收到</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`;
+}
+async function tgCreateChannel() {
+  const name = ($('#tcName').value || '').trim();
+  if (!name) return toast('先起个名字', 'warn');
+  try {
+    await api('/api/tg/channels', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        botUsername: $('#tcUser').value.trim(),
+        folderId: $('#tcFolder').value,
+        allowedRaw: $('#tcAllowed').value,
+      }),
+    });
+    toast('通道已创建', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgChanWhitelist(id) {
+  try {
+    const cd = await api('/api/tg/channels');
+    const c = (cd.channels || []).find((x) => x.id === id);
+    const v = await askText('白名单 Chat ID', '逗号分隔，留空 = 谁都不收', (c && c.allowed.join(', ')) || '', '123456789');
+    if (v === null) return;
+    await api('/api/tg/channels/' + id, { method: 'PATCH', body: JSON.stringify({ allowedRaw: v }) });
+    toast('已保存', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgChanToggle(id, on) {
+  try {
+    await api('/api/tg/channels/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !!on }) });
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgChanDel(id, name) {
+  if (!(await confirmDlg('删除通道', '确定删除「' + name + '」？目录里的文件不动。'))) return;
+  try {
+    await api('/api/tg/channels/' + id, { method: 'DELETE' });
+    toast('已删除', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgNewFolder() {
+  const name = await askText('新建 TG 文件夹', '建一个目录，并给它开一个 TG 通道', 'TG 上传', '创建');
+  if (!name) return;
+  try {
+    const r = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name, parentId: null }) });
+    const fid = (r.folder && r.folder.id) || r.id;
+    await api('/api/tg/channels', { method: 'POST', body: JSON.stringify({ name, folderId: fid, allowedRaw: '' }) });
+    toast('文件夹与通道已创建', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgSave(regen = false) {
+  try {
+    const body = { regenSecret: !!regen };
+    const t = $('#tgToken').value.trim();
+    if (t) body.botToken = t;
+    await api('/api/tg/config', { method: 'POST', body: JSON.stringify(body) });
+    toast('已保存', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgClear() {
+  try { await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ clearToken: true }) }); toast('已清空', 'ok'); renderTelegram(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function renderTgSettings() {
+  const d = await api('/api/tg/config');
+  tgCfg = d.config;
+  crumb([{ t: 'TG 上传' }, { t: '设置' }]);
   const origin = location.origin;
   const hook = tgCfg.secret ? `${origin}/api/tg/webhook/${tgCfg.secret}` : '（先保存，会自动生成 secret）';
   $('#view').innerHTML = `
-    <div class="page-h"><h2>TG 上传</h2><span class="sub">给机器人发文件，自动落进网盘</span></div>
+    <div class="page-h"><button class="btn ghost" onclick="tgView='list';renderTelegram()">← 返回</button><h2>TG 上传 · 设置</h2><span class="sub">机器人 Token、Webhook、大文件地址</span></div>
 
     <div class="card" style="padding:18px;margin-bottom:14px">
       <div class="row" style="justify-content:space-between;margin-bottom:6px"><b>机器人</b>
@@ -1508,7 +1632,7 @@ async function renderTelegram() {
       <div class="row wrap" style="gap:8px">
         <button class="btn primary" onclick="tgSave()">保存</button>
         <button class="btn ghost" onclick="tgSave(true)">重新生成 secret</button>
-        ${tgCfg.botTokenSet ? `<button class="btn ghost" onclick="tgClear()">清空 Token</button>` : ''}
+        ${tgCfg.botTokenSet ? '<button class="btn ghost" onclick="tgClear()">清空 Token</button>' : ''}
       </div>
       <div class="mut" style="margin-top:10px">Webhook 地址：<span class="mono">${esc(hook)}</span></div>
     </div>
@@ -1522,27 +1646,14 @@ async function renderTelegram() {
         <button class="btn ghost" onclick="tgRefresh()">刷新状态</button>
       </div>
       <div id="tgInfo" class="mut" style="margin-top:10px"></div>
-      ${tgCfg.lastAt ? `<div class="mut" style="margin-top:6px">上次收到文件：${when(tgCfg.lastAt)}</div>` : ''}
-    </div>
-
-    <div class="card" style="padding:18px;margin-bottom:14px">
-      <b>过滤与落盘位置</b>
-      <div class="field" style="margin-top:8px"><label>允许的 Chat ID（逗号分隔；留空 = 谁都不收，先把自己的 Chat ID 加进来）</label>
-        <input id="tgAllowed" class="input mono" value="${esc(tgCfg.allowed.join(', '))}" placeholder="123456789, -1001234567890"></div>
-      <div class="field"><label>落到哪个目录 ID（留空 = 根目录）</label>
-        <input id="tgFolder" class="input mono" value="${tgCfg.folderId ?? ''}" placeholder="例如 3"></div>
-      <div class="mut" style="margin-top:6px">当前落盘目录：<b>${esc(tgCfg.folderName || '网盘根目录')}</b>；上传的文件会在它下面按 Chat ID 建子文件夹。</div>
-      <div style="margin-top:8px"><button class="btn ghost" onclick="tgNewFolder()">＋ 新建 TG 文件夹</button></div>
-      <button class="btn primary" onclick="tgSaveFolder()">保存</button>
-      <div class="mut" style="margin-top:8px">不确定自己的 Chat ID？给 bot 发一句 /start 后，去 getUpdates 看 <span class="mono">chat.id</span>；留空时先给 bot 发一句，它会回你的 Chat ID，照抄到上面再加白名单。</div>
+      ${tgCfg.lastAt ? '<div class="mut" style="margin-top:6px">上次收到文件：' + when(tgCfg.lastAt) + '</div>' : ''}
     </div>
 
     <div class="card" style="padding:18px;margin-bottom:14px">
       <div class="row" style="justify-content:space-between;margin-bottom:6px"><b>大文件：自定义 Bot API 地址</b>
         <span class="pill ${tgCfg.customBase ? 'ok' : 'warn'}">当前上限 ${bytes(tgCfg.maxBytes)}</span></div>
       <div class="mut" style="margin-bottom:10px;line-height:1.8">
-        Telegram <b>云</b> Bot API 的 <span class="mono">getFile</span> 只允许机器人下载 <b>20MB</b> 以内的文件 —— 所以别人发给 bot 的 1.9GB，bot 拿不到，这条渠道就卡在 20MB。<br>
-        想突破：自己跑官方 <span class="mono">telegram-bot-api</span> 的 <span class="mono">--local</span> 模式，下载不限大小、上传到 2000MB，然后把它的地址填到下面。
+        Telegram <b>云</b> Bot API 的 <span class="mono">getFile</span> 只允许机器人下载 <b>20MB</b> 以内的文件。想突破：自己跑官方 <span class="mono">telegram-bot-api</span> 的 <span class="mono">--local</span> 模式，下载不限大小、上传到 2000MB，然后把它的地址填到下面。
       </div>
       <div class="field"><label>Bot API 地址（留空 = 官方 https://api.telegram.org）</label>
         <input id="tgBase" class="input mono" value="${esc(tgCfg.customBase ? tgCfg.apiBase : '')}" placeholder="https://tg-api.你的域名.workers.dev"></div>
@@ -1561,42 +1672,12 @@ async function renderTelegram() {
       <ol class="mut" style="margin:8px 0 0 18px;line-height:1.9">
         <li>@BotFather 建 bot → 复制 token 填上面 → 保存</li>
         <li>点「注册 Webhook」</li>
+        <li>回列表页建一个通道，把 Chat ID 填进白名单</li>
         <li>在 Telegram 里给 bot 发文件（文档 / 视频 / 音频 / 图片）</li>
-        <li>文件自动进网盘，bot 回一句「✅ 已存入」</li>
+        <li>文件自动进网盘对应目录，bot 回一句「✅ 已存入」</li>
       </ol>
       <div class="mut" style="margin-top:8px">Telegram 云 Bot API 单文件上限 20MB；想传更大的，用上面「自定义 Bot API 地址」接本地 Bot API Server（上限 2GB）。</div>
     </div>`;
-}
-async function tgSave(regen = false) {
-  const patch = { regenSecret: !!regen };
-  const t = $('#tgToken').value.trim();
-  if (t) patch.botToken = t;
-  try {
-    const r = await api('/api/tg/config', { method: 'POST', body: JSON.stringify(patch) });
-    tgCfg = r.config; toast(regen ? 'secret 已重新生成，记得重新注册 Webhook' : '已保存', 'ok');
-    renderTelegram();
-  } catch (e) { toast(e.message, 'err'); }
-}
-async function tgClear() {
-  if (!(await confirmDlg('清空 Bot Token', '清空后 TG 渠道停用，可随时再填。'))) return;
-  try { await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ clearToken: true }) }); toast('已清空', 'ok'); renderTelegram(); }
-  catch (e) { toast(e.message, 'err'); }
-}
-async function tgNewFolder() {
-  const name = await askText('新建 TG 文件夹', '会在网盘根目录建一个目录，并设为 TG 上传的落盘位置。', 'TG 上传', '目录名');
-  if (!name) return;
-  try {
-    const f = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name, parentId: null }) });
-    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ folderId: f.id }) });
-    toast('已创建并设为落盘目录', 'ok');
-    renderTelegram();
-  } catch (e) { toast(e.message, 'err'); }
-}
-async function tgSaveFolder() {
-  try {
-    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ allowedRaw: $('#tgAllowed').value, folderId: $('#tgFolder').value.trim() }) });
-    toast('已保存', 'ok'); renderTelegram();
-  } catch (e) { toast(e.message, 'err'); }
 }
 async function tgSaveBase() {
   try {

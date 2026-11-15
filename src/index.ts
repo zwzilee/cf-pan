@@ -18,6 +18,10 @@ import {
   registerTgWebhook,
   saveTgConfig,
   handleTgUpdate,
+  listChannels,
+  createChannel,
+  updateChannel,
+  deleteChannel,
 } from './tg';
 import {
   createSheet,
@@ -201,6 +205,12 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/tg/info' && m === 'GET') return await tgInfoHandler(req, env);
   if (p === '/api/tg/register' && m === 'POST') return await tgRegisterHandler(req, env);
   if (p === '/api/tg/unregister' && m === 'POST') return await tgUnregisterHandler(req, env);
+  if (p === '/api/tg/channels' && m === 'GET') return await tgChannelsHandler(req, env);
+  if (p === '/api/tg/channels' && m === 'POST') return await tgChannelCreateHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'channels' && seg[3] && m === 'PATCH')
+    return await tgChannelUpdateHandler(req, env, seg[3]);
+  if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'channels' && seg[3] && m === 'DELETE')
+    return await tgChannelDeleteHandler(req, env, seg[3]);
 
   // ================= 管理员：WebDAV 挂载 =================
   if (p === '/api/dav' && m === 'GET') return await davListHandler(req, env);
@@ -1243,6 +1253,51 @@ async function tgUnregisterHandler(req: Request, env: Env): Promise<Response> {
   await requireAdmin(req, env);
   await deleteTgWebhook(env);
   return json({ ok: true, config: await tgConfigView(env) });
+}
+
+async function tgChannelsHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ ok: true, channels: await listChannels(env) });
+}
+
+async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const name = String(b.name || '').trim();
+  if (!name) throw new HttpError(400, '名称不能为空');
+  let folderId: number | null = null;
+  if (b.folderId !== undefined && b.folderId !== null && b.folderId !== '' && b.folderId !== 'root') {
+    const n = Number(b.folderId);
+    const f = Number.isFinite(n) ? await env.DB.prepare('SELECT id FROM folders WHERE id = ?').bind(n).first<any>() : null;
+    if (!f) throw new HttpError(400, '所选目录不存在');
+    folderId = n;
+  }
+  const ch = await createChannel(env, {
+    name,
+    folderId,
+    botUsername: typeof b.botUsername === 'string' ? b.botUsername : '',
+    allowedRaw: typeof b.allowedRaw === 'string' ? b.allowedRaw : '',
+  });
+  return json({ ok: true, channel: ch });
+}
+
+async function tgChannelUpdateHandler(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAdmin(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  await updateChannel(env, id, {
+    name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined,
+    folderId: b.folderId === undefined ? undefined : b.folderId === '' || b.folderId === null || b.folderId === 'root' ? null : Number(b.folderId),
+    botUsername: typeof b.botUsername === 'string' ? b.botUsername : undefined,
+    allowedRaw: typeof b.allowedRaw === 'string' ? b.allowedRaw : undefined,
+    enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
+  });
+  return json({ ok: true });
+}
+
+async function tgChannelDeleteHandler(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAdmin(req, env);
+  await deleteChannel(env, id);
+  return json({ ok: true });
 }
 
 async function tgWebhook(req: Request, env: Env, secret: string, ctx?: ExecutionContext): Promise<Response> {

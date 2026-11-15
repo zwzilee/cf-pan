@@ -171,3 +171,15 @@ CREATE TABLE IF NOT EXISTS dav_mounts (
 );
 CREATE INDEX IF NOT EXISTS idx_dav_mounts_hash ON dav_mounts(key_hash);
 CREATE INDEX IF NOT EXISTS idx_dav_mounts_folder ON dav_mounts(folder_id);
+-- 第 21 轮：TG 通道（每个通道 = 一个目录 + 一份白名单）
+CREATE TABLE IF NOT EXISTS tg_channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  folder_id INTEGER NULL,
+  bot_username TEXT NOT NULL DEFAULT '',
+  allowed TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tg_channels_folder ON tg_channels(folder_id);

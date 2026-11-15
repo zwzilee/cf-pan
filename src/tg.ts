@@ -210,13 +210,15 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     }
   };
 
-  if (!cfg.allowed.length) {
-    await reply(`还没有白名单。把你的 Chat ID 加进白名单才能上传：${chatId}`);
-    return { ok: true, skipped: 'whitelist empty: ' + chatId };
-  }
-  if (!cfg.allowed.includes(chatId)) {
-    await reply(`这个 Chat ID 不在白名单里：${chatId}`);
-    return { ok: true, skipped: 'chat not allowed: ' + chatId };
+  const chans = await listChannels(env);
+  const chan = chans.find((c) => c.enabled && c.allowed.includes(chatId)) || null;
+  if (!chan) {
+    if (!chans.length) {
+      await reply(`还没有 TG 通道。先在后台上建一个「TG 文件夹」，再把 Chat ID ${chatId} 加进它的白名单。`);
+    } else {
+      await reply(`这个 Chat ID 不在任何通道的白名单里：${chatId}`);
+    }
+    return { ok: true, skipped: 'no channel: ' + chatId };
   }
 
   const picked = pickFile(msg);
@@ -252,7 +254,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
 
   // 3) 落盘（单片：单片上限 100MB，超过就按 100MB 切片）
   const chunkSize = Math.min(Math.max(Math.min(size, MAX_CHUNK), MIN_CHUNK), MAX_CHUNK);
-  const targetFolder = await ensureChatFolder(env, cfg.folderId, chatId);
+  const targetFolder = await ensureChatFolder(env, chan.folder_id, chatId);
   const up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
   const total = Math.max(1, Math.ceil(size / chunkSize));
   for (let i = 0; i < total; i++) {
@@ -262,6 +264,84 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
   const done = await completeUpload(env, up.uploadId);
 
   await setSetting(env, 'tg_last_at', new Date().toISOString());
+  await env.DB.prepare('UPDATE tg_channels SET last_at = ? WHERE id = ?').bind(new Date().toISOString(), chan.id).run();
   await reply(`✅ 已存入网盘：${picked.name}（${fmtBytes(size)}）`);
   return { ok: true, fileId: done.fileId, name: picked.name, size };
+}
+
+/* ------------------------- TG 通道（每个通道 = 一个目录 + 一份白名单） ------------------------- */
+
+export interface TgChannel {
+  id: string;
+  name: string;
+  folder_id: number | null;
+  bot_username: string;
+  allowed: string[];
+  enabled: boolean;
+  created_at: string;
+  last_at: string | null;
+}
+
+function splitIds(s: any): string[] {
+  return String(s || '')
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function mapChannel(r: any): TgChannel {
+  return {
+    id: r.id,
+    name: r.name,
+    folder_id: r.folder_id == null ? null : Number(r.folder_id),
+    bot_username: r.bot_username || '',
+    allowed: splitIds(r.allowed),
+    enabled: !!r.enabled,
+    created_at: r.created_at || '',
+    last_at: r.last_at || null,
+  };
+}
+
+export async function listChannels(env: Env): Promise<TgChannel[]> {
+  const { results } = await env.DB.prepare('SELECT * FROM tg_channels ORDER BY created_at DESC').all<any>();
+  return (results || []).map(mapChannel);
+}
+
+export async function getChannel(env: Env, id: string): Promise<TgChannel | null> {
+  const r = await env.DB.prepare('SELECT * FROM tg_channels WHERE id = ?').bind(id).first<any>();
+  return r ? mapChannel(r) : null;
+}
+
+export async function createChannel(
+  env: Env,
+  o: { name: string; folderId: number | null; botUsername?: string; allowedRaw?: string },
+): Promise<TgChannel> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    'INSERT INTO tg_channels (id, name, folder_id, bot_username, allowed, enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
+  )
+    .bind(id, o.name, o.folderId, (o.botUsername || '').trim(), splitIds(o.allowedRaw).join(','), new Date().toISOString())
+    .run();
+  return (await getChannel(env, id))!;
+}
+
+export async function updateChannel(
+  env: Env,
+  id: string,
+  o: { name?: string; folderId?: number | null; botUsername?: string; allowedRaw?: string; enabled?: boolean },
+) {
+  const sets: string[] = [];
+  const vals: any[] = [];
+  if (o.name !== undefined) { sets.push('name = ?'); vals.push(o.name); }
+  if (o.folderId !== undefined) { sets.push('folder_id = ?'); vals.push(o.folderId); }
+  if (o.botUsername !== undefined) { sets.push('bot_username = ?'); vals.push(o.botUsername.trim()); }
+  if (o.allowedRaw !== undefined) { sets.push('allowed = ?'); vals.push(splitIds(o.allowedRaw).join(',')); }
+  if (typeof o.enabled === 'boolean') { sets.push('enabled = ?'); vals.push(o.enabled ? 1 : 0); }
+  if (!sets.length) return;
+  vals.push(id);
+  await env.DB.prepare(`UPDATE tg_channels SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+}
+
+export async function deleteChannel(env: Env, id: string): Promise<void> {
+  await env.DB.prepare('DELETE FROM tg_channels WHERE id = ?').bind(id).run();
 }
