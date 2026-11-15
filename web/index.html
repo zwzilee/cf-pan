@@ -217,6 +217,14 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
 .preview th,.preview td{border:1px solid var(--line);padding:6px 9px}
 .preview img{max-width:100%}
 
+/* ---------- 右键菜单 ---------- */
+.ctxmenu{position:fixed;z-index:9990;min-width:140px;background:#141b2b;border:1px solid var(--line2);
+  border-radius:10px;padding:6px;box-shadow:0 16px 40px rgba(0,0,0,.55);animation:fade .1s ease}
+.ctxmenu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--fg);
+  font-size:13px;padding:8px 10px;border-radius:7px;cursor:pointer}
+.ctxmenu button:hover{background:#1e2a42}
+.ctxmenu button.danger{color:#ff9a9d}
+
 /* ---------- 图片灯箱 ---------- */
 .lb{position:fixed;inset:0;z-index:9997;background:rgba(2,4,8,.93);display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:12px;padding:18px;animation:fade .15s ease}
@@ -659,6 +667,92 @@ async function renderFiles() {
     const back = $('#view .dl-row');
     if (back) back.onclick = () => go('files', { folder: path[path.length - 2]?.id ?? null });
   }
+  wireOpen(items);
+}
+
+/** 打开一个条目：目录进目录、表格/文档进编辑器、图片开灯箱、音视频进播放器、其余下载 */
+function openItem(it) {
+  if (!it) return;
+  if (it.kind === 'folder') return go('files', { folder: it.id });
+  if (it.kind === 'sheet') return openSheet(it.id);
+  if (it.kind === 'doc') return openDoc(it.id);
+  const n = it.name || '';
+  if (/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(n)) return previewImage(it.id, n, it.size);
+  if (/\.(mp4|webm|ogg|mov|m4v|mp3|m4a|flac|wav|aac)$/i.test(n)) return play(it.id);
+  return downloadFile(it.id, n, it.size);
+}
+
+/** 给文件行挂上：双击（PC）、右键菜单、移动端双击 */
+function wireOpen(items) {
+  const rows = [...document.querySelectorAll('#view .dl .dl-row')];
+  const backOffset = state.folder !== null ? 1 : 0;
+  rows.forEach((r, i) => {
+    const it = items[i - backOffset];
+    if (!it || i < backOffset) return;
+    r.style.cursor = 'pointer';
+    r.title = '双击打开 · 右键更多';
+    const isFile = it.kind === 'file';
+    r.__item = it;
+    r.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('button,a')) return;
+      e.preventDefault();
+      const menu = [];
+      menu.push(['打开', () => openItem(it)]);
+      if (isFile) menu.push(['下载', () => downloadFile(it.id, it.name, it.size)]);
+      if (isFile && state.can.shares) menu.push(['分享', () => shareFile(it.id)]);
+      if (state.can.write) menu.push(['重命名', () => renameAny(it)]);
+      if (state.can.write) menu.push(['删除', () => deleteAny(it), true]);
+      showCtxMenu(e.clientX, e.clientY, menu);
+    });
+  });
+  if (!window.__openDelegated) {
+    window.__openDelegated = true;
+    const rowOf = (e) => (e.target.closest ? e.target.closest('#view .dl-row') : null);
+    document.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button,a')) return;
+      const r = rowOf(e); if (r && r.__item) openItem(r.__item);
+    }, true);
+    let lastTap = 0;
+    const tapHandler = (e) => {
+      if (e.target.closest('button,a')) return;
+      const r = rowOf(e); if (!r || !r.__item) return;
+      const t = Date.now();
+      if (lastTap && t - lastTap < 500) { lastTap = 0; openItem(r.__item); }
+      else lastTap = t;
+    };
+    document.addEventListener('touchend', tapHandler, true);
+    document.addEventListener('pointerup', (e) => { if (e.pointerType && e.pointerType !== 'mouse') tapHandler(e); }, true);
+  }
+}
+
+function renameAny(it) {
+  if (it.kind === 'folder') return renameFolder(it.id, it.name);
+  if (it.kind === 'sheet') return renameSheet(it.id, it.name);
+  if (it.kind === 'doc') return renameDoc(it.id, it.name);
+}
+function deleteAny(it) {
+  if (it.kind === 'folder') return delFolder(it.id);
+  if (it.kind === 'sheet') return delSheet(it.id);
+  if (it.kind === 'doc') return delDoc(it.id);
+  if (it.kind === 'file') return delFile(it.id);
+}
+
+/** 右键菜单：轻量浮层，点外面/Esc 关掉 */
+function showCtxMenu(x, y, entries) {
+  document.querySelectorAll('.ctxmenu').forEach((n) => n.remove());
+  const box = el(`<div class="ctxmenu">${entries.map(([label, , danger], i) =>
+    `<button data-i="${i}" class="${danger ? 'danger' : ''}">${esc(label)}</button>`).join('')}</div>`);
+  document.body.appendChild(box);
+  const w = box.offsetWidth, hgt = box.offsetHeight;
+  box.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+  box.style.top = Math.min(y, window.innerHeight - hgt - 8) + 'px';
+  box.querySelectorAll('button').forEach((btn) => {
+    btn.onclick = () => { const i = Number(btn.dataset.i); box.remove(); entries[i][1](); };
+  });
+  const off = (e) => { if (!box.contains(e.target)) { box.remove(); cleanup(); } };
+  const escKey = (e) => { if (e.key === 'Escape') { box.remove(); cleanup(); } };
+  const cleanup = () => { document.removeEventListener('mousedown', off); document.removeEventListener('keydown', escKey); };
+  setTimeout(() => { document.addEventListener('mousedown', off); document.addEventListener('keydown', escKey); }, 0);
 }
 
 function row(name, sub, icon, acts) {
@@ -808,6 +902,18 @@ async function newSheet() {
   const name = await askText('新建表格', '行列随时可以加', '未命名表格', '表格名'); if (!name) return;
   const r = await api('/api/sheets', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
   openSheet(r.id);
+}
+async function renameSheet(id, name) {
+  const n = await askText('重命名表格', '', name, '名称');
+  if (!n || n === name) return;
+  try { await api(`/api/sheets/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n }) }); toast('已改名', 'ok'); go('files'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function renameDoc(id, name) {
+  const n = await askText('重命名文档', '', name, '名称');
+  if (!n || n === name) return;
+  try { await api(`/api/docs/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n }) }); toast('已改名', 'ok'); go('files'); }
+  catch (e) { toast(e.message, 'err'); }
 }
 async function delSheet(id) {
   if (!(await confirmDlg('删除表格', '这张表的全部单元格都会被清掉。'))) return;
