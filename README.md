@@ -827,6 +827,7 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | GET | `/api/folders` · `/api/files?folder=` | 目录 / 文件列表 |
 | GET | `/api/files/:id/download` | 下载（Range，超 50 片自动分期） |
 | GET | `/api/files/:id/play` | 内联播放（正确 Content-Type + inline） |
+| GET | `/api/files/:id/preview` | 试播前缀流：只返回前 256MB（大文件/编码受限时的兜底） |
 | GET | `/api/sheets` · `/api/sheets/:id` · `/:id/export` | 表格列表 / 内容 / 导出 TSV |
 | GET | `/api/docs` · `/api/docs/:id` | 文档列表 / 内容（`?raw=1` 纯文本，`?view=1` 渲染页） |
 
