@@ -815,6 +815,7 @@ async function listSharesHandler(req: Request, env: Env): Promise<Response> {
         fileId: rec.fileId,
         fileName: f?.name ?? '(文件已删除)',
         size: f?.size ?? 0,
+        deleted: !f,
         max: rec.max,
         used: rec.used,
         code: rec.code || '',

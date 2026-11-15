@@ -57,6 +57,9 @@ export async function deleteFileDeep(env: Env, fileId: string): Promise<DeleteRe
     await env.DB.prepare('DELETE FROM blobs WHERE hash = ?').bind(hash).run();
   }
 
+  // 缩略图存在 KV 里，不在 D1 —— 不清掉会变成看不见的残留（文件都删了还能 GET 到图）
+  try { await env.KV.delete('thumb:' + fileId); } catch { /* KV 抽风不影响主流程 */ }
+
   await env.DB.batch([
     env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(fileId),
     env.DB.prepare('DELETE FROM files WHERE id = ?').bind(fileId),

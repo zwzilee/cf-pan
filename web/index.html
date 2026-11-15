@@ -1868,7 +1868,7 @@ async function renderShares() {
     html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
       <th>文件</th><th>大小</th><th>下载次数</th><th>提取码</th><th>每日</th><th>过期</th><th></th></tr></thead><tbody>`;
     for (const s of shares) {
-      html += `<tr data-jti="${esc(s.jti)}"><td>${esc(s.fileName)}</td><td class="mut">${bytes(s.size)}</td>
+      html += `<tr data-jti="${esc(s.jti)}"><td>${esc(s.fileName)}${s.deleted ? ' <span class="pill warn">文件已没了</span>' : ''}</td><td class="mut">${bytes(s.size)}</td>
         <td>${s.used}${s.max ? ' / ' + s.max : ' / 不限'}</td>
         <td class="mut">${s.code ? esc(s.code) : '—'}</td>
         <td class="mut">${s.dayMax || s.byteMax ? `${s.dayMax || '∞'} 次 / ${s.byteMax ? Math.round(s.byteMax / 1048576) + 'MB' : '∞'}` : '—'}</td>
