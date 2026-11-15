@@ -1,0 +1,32 @@
+# PAN R2 —— 多账号 R2 聚合网盘
+# 部署：npm i && npx wrangler login && npx wrangler d1 create pan_r2
+#      把下面的 database_id / kv id 换成真实值后 npx wrangler deploy
+name = "pan-r2"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+workers_dev = true
+
+# 前端静态文件（可选：也可用 Pages 单独托管 web/）
+[assets]
+directory = "./web"
+binding = "ASSETS"
+
+[vars]
+PUBLIC_APP_NAME = "PAN R2"
+# 首次部署：管理员账号，形如 "admin:你的密码"。创建后会写入 D1，之后可从控制台删掉这行
+BOOTSTRAP_ADMIN = "admin:change-me-now"
+# JWT 签名密钥请用 secret 设置，不要写在这里：
+#   npx wrangler secret put JWT_SECRET
+#   npx wrangler secret put MASTER_KEY   # 可选：加密账号密钥，强烈建议
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pan_r2"
+database_id = "REPLACE_WITH_D1_ID"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_KV_ID"
+
+[observability]
+enabled = true

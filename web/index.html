@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>PAN R2</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#2b333d; --fg:#e6edf3; --mut:#8b949e; --acc:#2ea043; --warn:#d29922; --err:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; }
+  nav { display:flex; gap:4px; }
+  nav button { background:transparent; border:0; color:var(--mut); padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; }
+  nav button.on { background:#1f2731; color:var(--fg); }
+  .spacer { flex:1; }
+  .btn { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font-size:13px; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .btn.mini { padding:4px 9px; font-size:12px; }
+  .btn.danger { background:transparent; border:1px solid #5a2a2a; color:var(--err); }
+  main { padding:20px; max-width:1000px; margin:0 auto; }
+  .bar { display:flex; align-items:center; gap:12px; color:var(--mut); font-size:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .bar b { color:var(--fg); }
+  .meter { flex:1; min-width:120px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .meter i { display:block; height:100%; background:var(--acc); }
+  table { width:100%; border-collapse:collapse; }
+  td,th { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); font-size:13px; vertical-align:middle; }
+  th { color:var(--mut); font-weight:500; }
+  tr:hover td { background:#1b222c; }
+  a { color:#58a6ff; text-decoration:none; }
+  .login { max-width:340px; margin:14vh auto; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:26px; }
+  .login h2 { margin:0 0 18px; font-size:18px; }
+  input, select { padding:9px 11px; background:#0d1117; border:1px solid var(--line); border-radius:6px; color:var(--fg); font-size:13px; width:100%; }
+  .login input { margin-bottom:12px; }
+  .err { color:var(--err); font-size:12px; min-height:18px; }
+  .drop { border:1px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--mut); margin-bottom:16px; cursor:pointer; }
+  .drop.hot { border-color:var(--acc); color:var(--fg); }
+  .prog { font-size:12px; color:var(--mut); margin-bottom:10px; white-space:pre-line; }
+  .hidden { display:none !important; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h3 { margin:0 0 12px; font-size:13px; color:var(--mut); font-weight:500; }
+  .tag { display:inline-block; padding:1px 7px; border-radius:20px; font-size:11px; }
+  .tag.ok { background:#12341c; color:#3fb950; }
+  .tag.off { background:#2b333d; color:var(--mut); }
+  .tag.warn { background:#3a2d0f; color:var(--warn); }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { min-width:0; }
+  .sharebox { display:flex; gap:8px; margin-top:10px; }
+  .sharebox input { font-family:ui-monospace,monospace; font-size:12px; }
+  @media (max-width:640px){ .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>PAN R2</h1>
+  <nav id="nav" class="hidden">
+    <button data-tab="files" class="on">文件</button>
+    <button data-tab="accounts">账号</button>
+    <button data-tab="shares">分享</button>
+  </nav>
+  <div class="spacer"></div>
+  <span id="who" class="prog"></span>
+  <button class="btn ghost hidden" id="logout">退出</button>
+</header>
+<main id="app"></main>
+<script>
+const app = document.getElementById('app');
+const $ = (s) => document.querySelector(s);
+const api = (path, opt = {}) =>
+  fetch('/api' + path, { credentials: 'include', ...opt }).then(async (r) => {
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  });
+const jpost = (path, body) => api(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+const fmt = (n) => {
+  if (!n) return '0 B';
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n < 10 && i ? 1 : 0) + ' ' + u[i];
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+let state = { role: null, tab: 'files', folder: null, accounts: [], shares: [] };
+
+// ---------- 登录 ----------
+function renderLogin() {
+  app.innerHTML = `<div class="login"><h2>登录 PAN R2</h2>
+    <input id="u" placeholder="用户名" autocomplete="username" />
+    <input id="p" type="password" placeholder="访问密码" autocomplete="current-password" />
+    <div class="err" id="e"></div>
+    <button class="btn" style="width:100%" id="go">进入</button></div>`;
+  const go = async () => {
+    try {
+      await jpost('/login', { username: $('#u').value, password: $('#p').value });
+      boot();
+    } catch (err) { $('#e').textContent = err.message; }
+  };
+  $('#go').onclick = go;
+  $('#p').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+}
+
+// ---------- 外壳 ----------
+async function boot() {
+  let me;
+  try { me = await api('/me'); } catch { return renderLogin(); }
+  state.role = me.user.role;
+  $('#nav').classList.remove('hidden');
+  $('#logout').classList.remove('hidden');
+  $('#who').textContent = me.user.role === 'admin' ? '管理员' : '只读用户';
+  $('#logout').onclick = async () => { await jpost('/logout'); location.reload(); };
+  $('#nav').onclick = (e) => {
+    const b = e.target.closest('button[data-tab]');
+    if (!b) return;
+    state.tab = b.dataset.tab;
+    [...$('#nav').children].forEach((x) => x.classList.toggle('on', x === b));
+    render();
+  };
+  render();
+}
+
+function render() {
+  if (state.tab === 'files') return renderFiles();
+  if (state.tab === 'accounts') return renderAccounts();
+  if (state.tab === 'shares') return renderShares();
+}
+
+// ---------- 文件 ----------
+async function renderFiles() {
+  const [st, fl] = await Promise.all([api('/stats'), api('/files' + (state.folder ? '?folder=' + state.folder : ''))]);
+  const pct = st.capacity ? Math.round((st.used / st.capacity) * 100) : 0;
+  const rows = fl.files.map((f) => `
+    <tr>
+      <td>${esc(f.name)}</td>
+      <td>${fmt(f.size)}</td>
+      <td>${f.chunks_count} 片</td>
+      <td class="row">
+        <a class="btn mini ghost" href="/api/files/${f.id}/play" target="_blank" rel="noopener">播放</a>
+        <button class="btn mini ghost" data-dl="${f.id}" data-name="${esc(f.name)}" data-size="${f.size}">下载</button>
+        <button class="btn mini ghost" data-share="${f.id}" data-name="${esc(f.name)}">分享</button>
+      </td>
+    </tr>`).join('') || `<tr><td colspan="4" style="color:var(--mut)">空空的，拖个文件上来</td></tr>`;
+
+  app.innerHTML = `
+    <div class="bar">
+      <span><b>${fmt(st.used)}</b> / ${fmt(st.capacity)}</span>
+      <span>${st.accounts} 账号</span>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <span>${pct}%</span>
+    </div>
+    <div class="drop" id="drop">把文件拖进来，或点这里选择（大文件自动分片续传）</div>
+    <input type="file" id="file" multiple class="hidden" />
+    <div class="prog" id="prog"></div>
+    <div id="sharepanel"></div>
+    <table>
+      <thead><tr><th>名称</th><th>大小</th><th>分片</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  const drop = $('#drop'), fileInput = $('#file');
+  drop.onclick = () => fileInput.click();
+  fileInput.onchange = () => { [...fileInput.files].forEach(uploadOne); fileInput.value = ''; };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('hot'); };
+  drop.ondragleave = () => drop.classList.remove('hot');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('hot'); [...e.dataTransfer.files].forEach(uploadOne); };
+
+  app.onclick = async (e) => {
+    const dl = e.target.closest('button[data-dl]');
+    if (dl) { downloadFile(dl.dataset.dl, dl.dataset.name, Number(dl.dataset.size)); return; }
+    const b = e.target.closest('button[data-share]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const r = await jpost('/files/' + b.dataset.share + '/share', { ttlSec: 7 * 86400 });
+      const url = location.origin + r.url;
+      $('#sharepanel').innerHTML = `<div class="card"><h3>分享链接 · ${esc(b.dataset.name)}</h3>
+        <div class="sharebox"><input id="su" readonly value="${esc(url)}" />
+        <button class="btn mini" id="copy">复制</button></div>
+        <div class="prog" style="margin-top:8px">7 天后过期 · 可在「分享」页撤销</div></div>`;
+      $('#copy').onclick = async () => {
+        await navigator.clipboard.writeText(url);
+        $('#copy').textContent = '已复制';
+      };
+    } catch (err) { alert('分享失败：' + err.message); }
+    b.disabled = false;
+  };
+}
+
+// 分段下载：单请求服务端最多拼 50 片（免费版 50 个外部子请求），
+// 大文件按 Content-Range 的 end 一段段续拉，用 File System Access API 直接写盘，
+// 避免整文件进内存。不支持时退回普通链接触发浏览器原生 Range。
+async function downloadFile(id, name, size) {
+  if (!window.showSaveFilePicker) {
+    location.href = '/api/files/' + id + '/download?dl=1';
+    return;
+  }
+  let handle;
+  try {
+    handle = await window.showSaveFilePicker({ suggestedName: name });
+  } catch { return; } // 用户取消
+  const w = await handle.createWritable();
+  const SEG = 2 * 1024 ** 3; // 每次最多请求 2GiB，服务端还会按 50 片夹断
+  let start = 0;
+  try {
+    while (start < size) {
+      const want = Math.min(start + SEG - 1, size - 1);
+      const r = await fetch('/api/files/' + id + '/download', {
+        credentials: 'include',
+        headers: { 'Range': 'bytes=' + start + '-' + want },
+      });
+      if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
+      await w.write(new Uint8Array(await r.arrayBuffer()));
+      const cr = r.headers.get('Content-Range'); // bytes a-b/total
+      let end = want;
+      if (cr) { const m = /bytes\s+(\d+)-(\d+)/.exec(cr); if (m) end = Number(m[2]); }
+      start = end + 1;
+    }
+    await w.close();
+  } catch (err) {
+    await w.abort();
+    alert('下载中断：' + err.message + '（可重新点击继续）');
+  }
+}
+
+// 大文件：分片大小自适应 + 并发上传 + 断点续传
+function chooseChunkSize(size) {
+  if (size > 8 * 1024 ** 3) return 64 * 1024 * 1024;   // >8GB → 64MB
+  if (size > 512 * 1024 ** 2) return 32 * 1024 * 1024; // >512MB → 32MB
+  return 16 * 1024 * 1024;
+}
+const CONCURRENCY = 3;
+
+async function uploadOne(file) {
+  const prog = $('#prog');
+  const cs = chooseChunkSize(file.size);
+  try {
+    const init = await jpost('/upload/init', { name: file.name, size: file.size, folderId: state.folder, chunkSize: cs });
+    const { uploadId, chunkSize, chunksCount } = init;
+    let done = 0, failed = null;
+    const started = Date.now();
+    prog.textContent = `上传 ${file.name}  0/${chunksCount}`;
+
+    const queue = Array.from({ length: chunksCount }, (_, i) => i);
+    const worker = async () => {
+      while (queue.length) {
+        const i = queue.shift();
+        if (failed) return;
+        const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size));
+        const buf = await blob.arrayBuffer();
+        const r = await fetch(`/api/upload/${uploadId}/chunk/${i}`, { method:'PUT', credentials:'include', body: buf });
+        if (!r.ok) { const j = await r.json().catch(()=>({})); failed = j.error || ('分片 ' + i + ' 失败'); return; }
+        done++;
+        const sec = (Date.now() - started) / 1000;
+        const rate = done * chunkSize / Math.max(sec, 0.001);
+        prog.textContent = `上传 ${file.name}  ${done}/${chunksCount}  ${fmt(Math.min(done * chunkSize, file.size))}/${fmt(file.size)}  ${fmt(rate)}/s`;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunksCount) }, worker));
+    if (failed) throw new Error(failed);
+
+    await jpost('/upload/' + uploadId + '/complete');
+    prog.textContent = `完成：${file.name}`;
+    renderFiles();
+  } catch (e) {
+    prog.textContent = `失败：${e.message}`;
+  }
+}
+
+// ---------- 账号管理 ----------
+async function renderAccounts() {
+  if (state.role !== 'admin') { app.innerHTML = `<div class="card">只有管理员能看账号池。</div>`; return; }
+  const d = await api('/accounts');
+  state.accounts = d.accounts;
+  const rows = d.accounts.map((a) => {
+    const pct = a.capacity_bytes ? Math.round((a.used_bytes / a.capacity_bytes) * 100) : 0;
+    return `<tr>
+      <td>${esc(a.name)}<div style="color:var(--mut);font-size:11px">${esc(a.bucket)}</div></td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px">${esc(a.account_id.slice(0,10))}…</td>
+      <td style="min-width:130px">
+        <div class="meter" style="margin-bottom:3px"><i style="width:${pct}%"></i></div>
+        <span style="color:var(--mut);font-size:11px">${fmt(a.used_bytes)} / ${fmt(a.capacity_bytes)} · ${pct}%</span>
+      </td>
+      <td>${a.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag off">停用</span>'}</td>
+      <td class="row" style="gap:6px;flex-wrap:wrap">
+        <button class="btn mini ghost" data-test="${a.id}">测连通</button>
+        <button class="btn mini ghost" data-toggle="${a.id}" data-on="${a.enabled}">${a.enabled ? '停用' : '启用'}</button>
+        <button class="btn mini ghost" data-cap="${a.id}" data-cur="${a.capacity_bytes}">改容量</button>
+        <button class="btn mini danger" data-del="${a.id}">删除</button>
+      </td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" style="color:var(--mut)">还没有账号，先加一个</td></tr>`;
+
+  const total = d.accounts.reduce((s, a) => s + a.capacity_bytes, 0);
+  const used = d.accounts.reduce((s, a) => s + a.used_bytes, 0);
+
+  app.innerHTML = `
+    <div class="bar"><span><b>${d.accounts.length}</b> 个账号</span>
+      <span>总容量 ${fmt(total)}</span><span>已用 ${fmt(used)}</span></div>
+    <div class="card"><h3>添加账号（每个 CF 账号一个 R2 桶）</h3>
+      <div class="grid">
+        <input id="a-name" placeholder="备注名，如 账号A" />
+        <input id="a-bucket" placeholder="桶名，如 pan-a" />
+        <input id="a-acc" placeholder="Cloudflare Account ID" />
+        <input id="a-ak" placeholder="R2 Access Key ID" />
+        <input id="a-sk" type="password" placeholder="R2 Secret Access Key" />
+        <input id="a-cap" placeholder="容量字节（留空=10GB 免费额度）" />
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="add">添加</button>
+        <span class="err" id="ae"></span>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>备注 / 桶</th><th>Account ID</th><th>用量</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  $('#add').onclick = async () => {
+    const body = {
+      name: $('#a-name').value.trim(),
+      bucket: $('#a-bucket').value.trim(),
+      account_id: $('#a-acc').value.trim(),
+      access_key_id: $('#a-ak').value.trim(),
+      secret_access_key: $('#a-sk').value.trim(),
+    };
+    const cap = $('#a-cap').value.trim();
+    if (cap) body.capacity_bytes = Number(cap);
+    try { await jpost('/accounts', body); renderAccounts(); }
+    catch (e) { $('#ae').textContent = e.message; }
+  };
+
+  app.onclick = async (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    try {
+      if (t.dataset.test) {
+        const r = await jpost('/accounts/' + t.dataset.test + '/test');
+        alert((r.ok ? '✅ ' : '❌ ') + r.message);
+      } else if (t.dataset.toggle) {
+        await api('/accounts/' + t.dataset.toggle, { method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ enabled: t.dataset.on === '1' ? 0 : 1 }) });
+        renderAccounts();
+      } else if (t.dataset.cap) {
+        const v = prompt('容量（字节）', t.dataset.cur);
+        if (!v) return;
+        await api('/accounts/' + t.dataset.cap, { method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ capacity_bytes: Number(v) }) });
+        renderAccounts();
+      } else if (t.dataset.del) {
+        if (!confirm('确认删除该账号？账号下若还有分片会被拒绝。')) return;
+        await api('/accounts/' + t.dataset.del, { method:'DELETE' });
+        renderAccounts();
+      }
+    } catch (err) { alert(err.message); }
+  };
+}
+
+// ---------- 分享管理 ----------
+async function renderShares() {
+  const d = await api('/shares');
+  state.shares = d.shares;
+  const rows = d.shares.map((s) => `
+    <tr>
+      <td>${esc(s.fileName)}<div style="color:var(--mut);font-size:11px">${fmt(s.size)}</div></td>
+      <td>${s.used}${s.max > 0 ? ' / ' + s.max : ' / 不限'}</td>
+      <td style="font-size:12px">${s.expiresAt ? new Date(s.expiresAt).toLocaleString('zh-CN') : '—'}</td>
+      <td><button class="btn mini danger" data-rev="${s.jti}">撤销</button></td>
+    </tr>`).join('') || `<tr><td colspan="4" style="color:var(--mut)">还没有分享链接</td></tr>`;
+
+  app.innerHTML = `
+    <div class="bar"><span><b>${d.shares.length}</b> 条有效分享</span></div>
+    <table>
+      <thead><tr><th>文件</th><th>下载次数</th><th>过期时间</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  app.onclick = async (e) => {
+    const b = e.target.closest('button[data-rev]');
+    if (!b) return;
+    if (!confirm('撤销后链接立刻失效，确认？')) return;
+    try { await api('/shares/' + b.dataset.rev, { method:'DELETE' }); renderShares(); }
+    catch (err) { alert(err.message); }
+  };
+}
+
+boot();
+</script>
+</body>
+</html>
