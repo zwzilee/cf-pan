@@ -120,7 +120,7 @@ pan-r2/
 │  ├─ s3.ts               # 存储适配层：跨账号 R2 的 PUT/GET(Range)/DELETE
 │  ├─ store.ts            # 账号池：增删改查、选桶(最空)、记账
 │  ├─ chunk.ts            # 分片层：init / putChunk / complete / Range 拼接流
-│  ├─ share.ts            # 分享链接：HMAC 签名 token、KV 记录、撤销/限次
+│  ├─ share.ts            # 分享链接：8 位短码 + KV 记录、撤销/限次
 │  ├─ sheet.ts            # 在线表格：稀疏单元格存 D1 + 自写公式求值器
 │  ├─ doc.ts              # 在线文档：Markdown 存 D1 + 极简渲染
 │  ├─ visit.ts            # 访问日志：落 D1、按 IP 聚合、按天清理
@@ -225,7 +225,7 @@ PUT chunk  ──▶ sha256(body) ──▶ blobs 里有这个 hash？
 - 口令 **PBKDF2-SHA256 / 10 万次**哈希存 D1；账号 Access Key 用 **AES-GCM** 加密，主密钥 `MASTER_KEY` 只在 Worker secret。
 - **登录失败限流**（`src/ratelimit.ts`）：KV 双层桶，账号桶 `login:u:<sha1(username)>` **5 次**、IP 桶 `login:ip:<sha1(ip)>` **100 次**，窗口 10 分钟。超限 `429`，连正确密码也进不去；登录成功清账号桶、保留 IP 桶。改密码的「旧密码」也记同一个桶。
   手工解锁：删 KV 里那把 key 即可。
-- **分享链接**：`src/share.ts` 用 HMAC-SHA256 签 `token=base64url(claims).base64url(sig)`，claims 含 `{f,e,j,d?}`；`/s/:token` 免登录下载页，`?dl=1` 才真正出文件。记录放 KV `share:<jti>`，可撤销 / 限下载次数 / 到期自动清除。
+- **分享链接**：`src/share.ts` 现在发**8 位短码**（字母表去掉 0/O/1/l/I，≈45 bit 熵），链接形如 `/s/HZKmxdc7`，全长 40 来个字符；文件 id、过期时间、限次都不进 URL，全放 KV `share:<code>`（`{fileId,max,used,exp}`，带 TTL 自动过期）。`/s/:code` 免登录下载页，`?dl=1` 才真正出文件；撤销=删 KV 那条，限次=读时自增。老的长链接（`base64url(claims).base64url(sig)`，HMAC-SHA256 签）仍然认，走 `verifyShareToken` 的兼容分支。
 - **务必**：`JWT_SECRET` / `MASTER_KEY` 用 `wrangler secret put`，不要写进 `wrangler.toml` 或仓库。
 
 ### 改管理员密码

@@ -758,7 +758,7 @@ async function delDoc(id) {
 async function renderUpload() {
   crumb([{ t: '上传' }]);
   $('#view').innerHTML = `
-    <div class="page-h"><h2>上传文件</h2>
+    <div class="page-h"><button class="btn sm" onclick="go('files')">← 返回</button><h2>上传文件</h2>
       <span class="sub">自动切成 16–64MB 分片，每片挑最空的账号落盘</span></div>
     <div class="drop" id="drop">
       <div style="font-size:30px;margin-bottom:8px">⬆️</div>
