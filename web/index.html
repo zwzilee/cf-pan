@@ -1371,6 +1371,25 @@ async function renderTelegram() {
       <div class="mut" style="margin-top:8px">不确定自己的 Chat ID？给 bot 发一句 /start 后，去 getUpdates 看 <span class="mono">chat.id</span>；或者先留空测试。</div>
     </div>
 
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px"><b>大文件：自定义 Bot API 地址</b>
+        <span class="pill ${tgCfg.customBase ? 'ok' : 'warn'}">当前上限 ${bytes(tgCfg.maxBytes)}</span></div>
+      <div class="mut" style="margin-bottom:10px;line-height:1.8">
+        Telegram <b>云</b> Bot API 的 <span class="mono">getFile</span> 只允许机器人下载 <b>20MB</b> 以内的文件 —— 所以别人发给 bot 的 1.9GB，bot 拿不到，这条渠道就卡在 20MB。<br>
+        想突破：自己跑官方 <span class="mono">telegram-bot-api</span> 的 <span class="mono">--local</span> 模式，下载不限大小、上传到 2000MB，然后把它的地址填到下面。
+      </div>
+      <div class="field"><label>Bot API 地址（留空 = 官方 https://api.telegram.org）</label>
+        <input id="tgBase" class="input mono" value="${esc(tgCfg.customBase ? tgCfg.apiBase : '')}" placeholder="https://tg-api.你的域名.workers.dev"></div>
+      <div class="field"><label>单文件上限（字节，0 = 按地址自动：云 20MB / 本地 2000MB）</label>
+        <input id="tgMax" class="input mono" value="${tgCfg.customBase ? tgCfg.maxBytes : 0}" placeholder="0"></div>
+      <button class="btn primary" onclick="tgSaveBase()">保存</button>
+      <div class="mut" style="margin-top:10px;line-height:1.9">
+        本地 Bot API Server 最小跑法（需要 api_id / api_hash，从 <span class="mono">my.telegram.org</span> 拿）：<br>
+        <span class="mono">docker run -d --name tg-api -p 8081:8081 -e TELEGRAM_API_ID=xxx -e TELEGRAM_API_HASH=yyy -e TELEGRAM_LOCAL=1 tdlib/telegram-bot-api:latest</span><br>
+        它说的是 HTTP，得前面套一层 HTTPS 反代（Caddy / Nginx / Cloudflare Tunnel），再把这个 https 地址填上来。
+      </div>
+    </div>
+
     <div class="card" style="padding:18px">
       <b>怎么用</b>
       <ol class="mut" style="margin:8px 0 0 18px;line-height:1.9">
@@ -1379,7 +1398,7 @@ async function renderTelegram() {
         <li>在 Telegram 里给 bot 发文件（文档 / 视频 / 音频 / 图片）</li>
         <li>文件自动进网盘，bot 回一句「✅ 已存入」</li>
       </ol>
-      <div class="mut" style="margin-top:8px">Telegram Bot API 单文件上限 20MB；更大的请用网页面板分片上传。</div>
+      <div class="mut" style="margin-top:8px">Telegram 云 Bot API 单文件上限 20MB；想传更大的，用上面「自定义 Bot API 地址」接本地 Bot API Server（上限 2GB）。</div>
     </div>`;
 }
 async function tgSave(regen = false) {
@@ -1400,6 +1419,12 @@ async function tgClear() {
 async function tgSaveFolder() {
   try {
     await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ allowedRaw: $('#tgAllowed').value, folderId: $('#tgFolder').value.trim() }) });
+    toast('已保存', 'ok'); renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgSaveBase() {
+  try {
+    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ apiBase: $('#tgBase').value.trim(), maxBytes: Number($('#tgMax').value.trim() || 0) }) });
     toast('已保存', 'ok'); renderTelegram();
   } catch (e) { toast(e.message, 'err'); }
 }

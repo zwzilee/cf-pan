@@ -1130,9 +1130,13 @@ async function tgConfigView(env: Env) {
     secret: c.secret,
     allowed: c.allowed,
     folderId: c.folderId,
+    apiBase: c.apiBase,
+    customBase: c.apiBase !== 'https://api.telegram.org',
+    maxBytes: c.maxBytes,
     webhookUrl: (await getSetting(env, 'tg_webhook_url')) || '',
     lastAt: (await getSetting(env, 'tg_last_at')) || '',
-    maxBytes: 20 * 1024 * 1024,
+    cloudMax: 20 * 1024 * 1024,
+    localMax: 2000 * 1024 * 1024,
   };
 }
 
@@ -1149,6 +1153,8 @@ async function tgSaveHandler(req: Request, env: Env, _ctx?: ExecutionContext): P
   if (b.clearToken) patch.botToken = '';
   if (typeof b.allowedRaw === 'string') patch.allowedRaw = b.allowedRaw;
   if (b.folderId !== undefined) patch.folderId = b.folderId === '' || b.folderId === null ? null : Number(b.folderId);
+  if (typeof b.apiBase === 'string') patch.apiBase = b.apiBase;
+  if (b.maxBytes !== undefined) patch.maxBytes = Number(b.maxBytes) || 0;
   if (b.regenSecret) patch.secret = newTgSecret();
   let cfg = await saveTgConfig(env, patch);
   if (!cfg.secret) cfg = await saveTgConfig(env, { secret: newTgSecret() });

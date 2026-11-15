@@ -157,23 +157,92 @@ pan-r2/
 
 | 范围 | 能干什么 |
 | --- | --- |
-| `read` | 只读：`/api/stats`、`/api/files`、`/api/tree`、下载 / 播放 |
+| `read` | 只读：`/api/stats`、`/api/files`、`/api/tree`、`/api/sheets`、`/api/docs`、下载 / 播放 |
 | `manage` | 读写全管：上传、删文件、账号池、分享、用户、日志、令牌本身 |
 
-- 令牌形如 `pan_<48 hex>`，**明文只在创建时显示一次**；库里只存 `sha256(token)`（`src/tokens.ts`），泄露了也没法从库反推。
-- 鉴权走 `Authorization: Bearer pan_xxx`。`src/roles.ts` 的 `readAccess()` 在 JWT 之外多认一种身份：`kind:'token'`，`requireAdmin()` 用 `isManager()` 判断——`admin` 会话或带 `manage` 范围的令牌都算管理员。
-- 令牌可停用（`enabled=0` 立即失效，不必删）、可删除；每次使用会刷新 `last_used_at`，后台能看到最后使用时间。
+#### 1. 拿一个令牌
+
+后台 → 左侧「管理 → API 令牌」→「＋ 管理令牌」→ 起个名字（例如 `ci-deploy`）→ 确定。
+
+页面上会弹出一张绿框，里面是 `pan_` 开头的 51 位字符串（`pan_` + 48 位 hex），旁边有「复制」按钮。**这串明文只显示这一次**：关掉卡片就再也看不到，只能删了重建。
+
+- 库里存的是 `sha256(令牌)`（`src/tokens.ts`），从 D1 里翻不出原文。
+- 列表里能看到的只有前缀（前 12 位，`pan_09fafdf4…`），够你认出是哪一条。
+- 每条都能「停用」（`enabled=0`，立刻失效，随时能再开）或「删除」（永久）。
+- 「最后使用」一列会跟着刷新，用来判断某个令牌还有没有人在用。
+
+#### 2. 怎么带
+
+只有一条规则：放进请求头 `Authorization: Bearer <令牌>`。
 
 ```bash
-export PAN_TOKEN=pan_xxxxxxxx
-curl -H "Authorization: Bearer $PAN_TOKEN" https://pan-r2.isophia1205.workers.dev/api/stats
-# 上传：init -> 逐片 PUT -> complete
-curl -X POST -H "Authorization: Bearer $PAN_TOKEN" -H "Content-Type: application/json" \
-     -d '{"name":"a.bin","size":10485760}' https://<worker>/api/upload/init
-curl -X PUT  -H "Authorization: Bearer $PAN_TOKEN" --data-binary @part0 \
-     https://<worker>/api/upload/<uploadId>/chunk/0
-curl -X POST -H "Authorization: Bearer $PAN_TOKEN" https://<worker>/api/upload/<uploadId>/complete
+export PAN=https://pan-r2.isophia1205.workers.dev
+export PAN_TOKEN=pan_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+#### 3. 常用调用
+
+```bash
+# 我是谁、有哪些权限
+curl -s -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/me
+
+# 总用量
+curl -s -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/stats
+
+# 根目录列表
+curl -s -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/files
+
+# 下载（Range 也支持）
+curl -s -H "Authorization: Bearer $PAN_TOKEN" -o out.bin $PAN/api/files/<fileId>/download
+
+# 在线播放（浏览器直接开这个 URL，带 ?token= 不行，要 Cookie 或 Bearer）
+curl -s -H "Authorization: Bearer $PAN_TOKEN" -o movie.mp4 $PAN/api/files/<fileId>/play
+```
+
+#### 4. 用令牌上传（三步）
+
+分片协议跟网页完全一样：`init` → 逐片 `PUT` → `complete`。
+
+```bash
+FILE=./big.iso
+SIZE=$(stat -c%s "$FILE")          # macOS: stat -f%z
+CHUNK=$((16*1024*1024))            # 16MB 一片
+
+# ① 建会话，拿到 uploadId / chunkSize / chunksCount
+INIT=$(curl -s -X POST -H "Authorization: Bearer $PAN_TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"$(basename $FILE)\",\"size\":$SIZE,\"chunkSize\":$CHUNK}" $PAN/api/upload/init)
+echo "$INIT"
+UPLOAD_ID=$(echo "$INIT" | sed -E 's/.*"uploadId":"([^"]+)".*/\1/')
+
+# ② 逐片上传（idx 从 0 开始，可以并发、可以断点续传 —— 已存在的片会跳过）
+split -b $CHUNK -d -a 4 "$FILE" /tmp/part.
+i=0
+for p in /tmp/part.*; do
+  curl -s -X PUT -H "Authorization: Bearer $PAN_TOKEN" --data-binary "@$p" \
+       $PAN/api/upload/$UPLOAD_ID/chunk/$i
+  i=$((i+1))
+done
+
+# ③ 收尾（校验片数与总大小，落成文件）
+curl -s -X POST -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/upload/$UPLOAD_ID/complete
+```
+
+要点：
+
+- `chunkSize` 会被夹到 **5MB – 100MB**（`MIN_CHUNK`/`MAX_CHUNK`），默认 16MB。**别超 100MB**：Workers 免费版请求体上限就是 100MB。
+- 每片会自动挑「剩余空间最大」的账号落盘；单片失败重传即可，已成功的片会返回 `skipped:true`。
+- `complete` 会核对分片数与总字节数，对不上就报错，不会留下半截文件。
+
+#### 5. 出错怎么看
+
+| 状态 | 意思 |
+| --- | --- |
+| `401` | 没带令牌，或令牌被删/停用/写错 |
+| `403` | 令牌是 `read` 范围，调了管理接口（例如 `/api/accounts`、`/api/tokens`） |
+| `400` | 参数不对（缺 `name`/`size`，或分片越界） |
+| `409` | 状态冲突（目录非空、前台密码没设等） |
+
+想知道自己这条令牌能不能干某事，先打 `/api/me`，返回里的 `can` 就是答案。
 
 ### Telegram 上传渠道
 
@@ -186,8 +255,35 @@ curl -X POST -H "Authorization: Bearer $PAN_TOKEN" https://<worker>/api/upload/<
 
 细节与限制：
 - webhook 路由是**公开**的（Telegram 来调），身份靠 URL 里的 `secret` 认；secret 不对直接 403。收到 update 后立即 200，真正的下载/落盘在 `ctx.waitUntil()` 里做，避免 Telegram 超时重投。
-- **Telegram Bot API 下载单文件上限 20MB**（官方限制，非本项目设置）；超过会回一句提示，让你走面板分片上传。
-- 20MB 以内一片就够（`chunkSize = min(max(size, 5MB), 100MB)`），所以这渠道本质是「小文件快速入库」。
+- 20MB 以内一片就够；超过 100MB 会自动切成多片（单片上限 `MAX_CHUNK`）。
+
+#### 为什么 1.9GB 发得出去却收不下来
+
+Telegram 有两条完全不同的限制，很容易搞混：
+
+| 方向 | 云 Bot API 上限 | 说明 |
+| --- | --- | --- |
+| 用户 → bot（客户端发送） | 2GB（普通账号）/ 4GB（Premium） | 这是 Telegram **客户端**自己传的，bot 只拿到一个 `file_id` |
+| bot → 下载（`getFile`） | **20MB** | 这才是本项目卡住的地方 |
+
+所以：你把 1.9GB 发给 bot，Telegram 会照收，bot 也能收到那条消息和 `file_id`；但 bot 一旦调 `getFile`，云 API 直接拒绝 —— **20MB 是官方硬限制**，不是网盘设的（[getFile 文档](https://core.telegram.org/bots/api/methods/getFile.md)、[tdlib/telegram-bot-api#141](https://github.com/tdlib/telegram-bot-api/issues/141)）。
+
+#### 想突破 20MB：接 Local Bot API Server
+
+官方 `telegram-bot-api` 用 `--local` 跑起来之后，**下载不限大小、上传到 2000MB**（[官方说明](https://core.telegram.org/bots/api.md#using-a-local-bot-api-server)）。
+
+1. 去 `my.telegram.org` 拿 `api_id` / `api_hash`。
+2. 跑起来（它只讲 HTTP，得套 HTTPS 反代：Caddy / Nginx / Cloudflare Tunnel）：
+   ```bash
+   docker run -d --name tg-api -p 8081:8081 \
+     -e TELEGRAM_API_ID=123456 -e TELEGRAM_API_HASH=abcdef0123456789 \
+     -e TELEGRAM_LOCAL=1 tdlib/telegram-bot-api:latest
+   ```
+3. 后台「TG 上传」→「自定义 Bot API 地址」填 `https://tg-api.你的域名`，保存。
+4. 回上面点「注册 Webhook」重挂一次（此时 webhook 是挂到本地服务器上的，可以走 HTTP / 内网 / 任意端口）。
+5. 上限自动变成 2GB；要改可以在「单文件上限」里手填字节数（`0` = 自动）。
+
+之后 `getFile` / 下载 / `setWebhook` 全部改走你填的地址，代码里只有一处 `apiBase` 在切（`tgApi(..., cfg.apiBase)`）。
 
 ---
 
