@@ -718,9 +718,12 @@ async function renameFolder(id, old) {
   go('files');
 }
 async function delFolder(id) {
-  if (!(await confirmDlg('删除目录', '目录里必须没有文件，否则会被拒绝。'))) return;
-  try { await api(`/api/folders/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
-  catch (e) { toast(e.message, 'err'); }
+  if (!(await confirmDlg('删除目录', '会连同里面所有文件、子目录一起删掉，无法恢复。'))) return;
+  try {
+    const r = await api(`/api/folders/${id}`, { method: 'DELETE' });
+    toast(`已删除：${r.files || 0} 个文件、${r.folders || 1} 个目录`, 'ok');
+    go('files');
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function delFile(id) {
   if (!(await confirmDlg('删除文件', '会同时清掉它在各个账号上的所有分片，无法恢复。'))) return;

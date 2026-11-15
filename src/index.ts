@@ -607,11 +607,35 @@ async function renameFolder(req: Request, env: Env, id: number): Promise<Respons
 async function deleteFolder(req: Request, env: Env, id: number): Promise<Response> {
   const me = await requireAdmin(req, env);
   noteUser(me);
-  const files = await env.DB.prepare('SELECT COUNT(*) AS n FROM files WHERE folder_id = ?').bind(id).first<any>();
-  const sub = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ?').bind(id).first<any>();
-  if ((files?.n ?? 0) > 0 || (sub?.n ?? 0) > 0) throw new HttpError(409, '目录不是空的，先把里面的文件/子目录清掉');
-  await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(id).run();
-  return json({ ok: true });
+  const root = await env.DB.prepare('SELECT id FROM folders WHERE id = ?').bind(id).first<any>();
+  if (!root) throw new HttpError(404, '目录不存在');
+
+  // 广度收集整棵子树（目录 id）
+  const ids: number[] = [];
+  const queue: number[] = [Number(id)];
+  while (queue.length) {
+    const cur = queue.pop() as number;
+    ids.push(cur);
+    const sub = await env.DB.prepare('SELECT id FROM folders WHERE parent_id = ?').bind(cur).all<any>();
+    for (const r of sub.results || []) queue.push(Number(r.id));
+  }
+
+  // 逐个删文件（走引用计数，配额和 blobs 一起退）
+  let files = 0;
+  let blobsDeleted = 0;
+  for (const fid of ids) {
+    const rows = await env.DB.prepare('SELECT id FROM files WHERE folder_id = ?').bind(fid).all<any>();
+    for (const f of rows.results || []) {
+      const r = await deleteFileDeep(env, String(f.id));
+      files += 1;
+      blobsDeleted += r.blobsDeleted;
+    }
+  }
+
+  for (let i = ids.length - 1; i >= 0; i--) {
+    await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(ids[i]).run();
+  }
+  return json({ ok: true, folders: ids.length, files, blobsDeleted });
 }
 
 // ============ 文件 ============

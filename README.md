@@ -833,7 +833,7 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST/PATCH/DELETE | `/api/folders[/:id]` | 新建 / 改名 / 删除（非空拒 409） |
+| POST/PATCH/DELETE | `/api/folders[/:id]` | 新建 / 改名 / 删除（**递归**：连同子目录、文件一起删，返回 `{folders,files,blobsDeleted}`） |
 | POST | `/api/upload/init` | 开上传会话 |
 | PUT | `/api/upload/:id/chunk/:idx` | 传一片 |
 | POST | `/api/upload/:id/complete` | 收尾成文件 |
