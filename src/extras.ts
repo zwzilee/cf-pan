@@ -5,7 +5,7 @@
 import { requireAdmin, requireAny } from './roles';
 import { HttpError, json, nowISO } from './util';
 import { deleteFileDeep } from './files';
-import { streamDownload } from './chunk';
+import { streamDownload, initUpload, putChunk, completeUpload } from './chunk';
 
 type Ctx = { uid: number; name?: string };
 
@@ -445,4 +445,106 @@ export async function copyHandler(req: Request, env: any): Promise<Response> {
     if (c.hash) await env.DB.prepare('UPDATE blobs SET refs=refs+1 WHERE hash=?').bind(c.hash).run();
   }
   return json({ ok: true, id: nid });
+}
+
+
+/** 把 R2 分片流读成整块（上限 64MB，超过报错） */
+async function readWhole(env: any, file: any): Promise<Uint8Array> {
+  const stream = await streamDownload(env, String(file.id), 0, Number(file.size) - 1);
+  const reader = (stream as ReadableStream<Uint8Array>).getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) { parts.push(value); total += value.byteLength; }
+    if (total > 64 * 1024 * 1024) throw new HttpError(413, '压缩包超过 64MB，请在本地解压后再传');
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const q of parts) { out.set(q, off); off += q.byteLength; }
+  return out;
+}
+
+async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  const ds = new DecompressionStream('deflate-raw');
+  const b = new Blob([data as any]);
+  const res = new Response(b.stream().pipeThrough(ds));
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** POST /api/files/:id/unzip — 把 zip 里的文件解到同一目录（store + deflate 两种） */
+export async function unzipHandler(req: Request, env: any, fileId: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(fileId).first();
+  if (!file) throw new HttpError(404, '文件不存在');
+  if (!/\.zip$/i.test(file.name)) throw new HttpError(400, '只支持 .zip');
+  const b = (await req.json().catch(() => ({}))) as any;
+  const parent = file.folder_id ?? null;
+
+  const buf = await readWhole(env, file);
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new HttpError(400, '不是有效的 zip');
+  const count = dv.getUint16(eocd + 10, true);
+  let ptr = dv.getUint32(eocd + 16, true);
+
+  const folderCache = new Map<string, number | null>();
+  folderCache.set('', parent);
+  const ensureDir = async (rel: string): Promise<number | null> => {
+    if (folderCache.has(rel)) return folderCache.get(rel)!;
+    const ix = rel.lastIndexOf('/');
+    const parentPath = ix < 0 ? '' : rel.slice(0, ix);
+    const name = ix < 0 ? rel : rel.slice(ix + 1);
+    const pid = await ensureDir(parentPath);
+    const ex = await env.DB.prepare('SELECT id FROM folders WHERE name = ? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)')
+      .bind(name, pid, pid).first();
+    let id = ex?.id;
+    if (!id) {
+      const r = await env.DB.prepare('INSERT INTO folders(parent_id, name, created_at) VALUES(?,?,?)').bind(pid, name, nowISO()).run();
+      id = r.meta.last_row_id;
+    }
+    folderCache.set(rel, id);
+    return id;
+  };
+
+  let files = 0;
+  let dirs = 0;
+  const names: string[] = [];
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(ptr, true) !== 0x02014b50) break;
+    const method = dv.getUint16(ptr + 10, true);
+    const csize = dv.getUint32(ptr + 20, true);
+    const nameLen = dv.getUint16(ptr + 28, true);
+    const extraLen = dv.getUint16(ptr + 30, true);
+    const commentLen = dv.getUint16(ptr + 32, true);
+    const lho = dv.getUint32(ptr + 42, true);
+    const rawName = new TextDecoder().decode(buf.subarray(ptr + 46, ptr + 46 + nameLen)).replace(/\\/g, '/');
+    ptr += 46 + nameLen + extraLen + commentLen;
+    if (!rawName || rawName.startsWith('__MACOSX/') || /(^|\/)\._/.test(rawName) || /(^|\/)\.DS_Store$/.test(rawName)) continue;
+    if (rawName.endsWith('/')) { await ensureDir(rawName.replace(/\/$/, '')); dirs++; continue; }
+    if (rawName.includes('..')) continue;
+
+    // 本地头：跳过文件名/扩展字段
+    const lnameLen = dv.getUint16(lho + 26, true);
+    const lextraLen = dv.getUint16(lho + 28, true);
+    const dataStart = lho + 30 + lnameLen + lextraLen;
+    const raw = buf.subarray(dataStart, dataStart + csize);
+    let data: Uint8Array;
+    if (method === 0) data = raw;
+    else if (method === 8) data = await inflateRaw(raw);
+    else continue; // 不支持的其他压缩方式
+
+    const dir = rawName.includes('/') ? await ensureDir(rawName.slice(0, rawName.lastIndexOf('/'))) : parent;
+    const base = rawName.slice(rawName.lastIndexOf('/') + 1);
+    const up: any = await initUpload(env, { name: base, size: data.byteLength, folderId: dir, chunkSize: data.byteLength || 1 });
+    await putChunk(env, up.uploadId, 0, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+    await completeUpload(env, up.uploadId);
+    files++;
+    if (names.length < 20) names.push(rawName);
+  }
+  return json({ ok: true, files, dirs, names });
 }

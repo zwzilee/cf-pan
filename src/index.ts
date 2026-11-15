@@ -1,4 +1,5 @@
 import type { Env } from './types';
+import { unzipHandler } from './extras';
 import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO } from './util';
 import { hashPassword, signJWT, verifyJWT, verifyPassword } from './auth';
 import { encryptSecret } from './crypto';
@@ -151,6 +152,8 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     return await setFolderEnc(req, env, Number(seg[2]));
   if (seg[0] === 'api' && seg[1] === 'folders' && seg[2] && m === 'DELETE')
     return await deleteFolder(req, env, Number(seg[2]));
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'unzip' && m === 'POST')
+    return await unzipHandler(req, env, seg[2]);
   if (p === '/api/upload/init' && m === 'POST') return await initHandler(req, env);
   if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'chunk' && seg[4] && m === 'PUT')
     return await putChunkHandler(req, env, seg[2], Number(seg[4]));
