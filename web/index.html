@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PAN R2 · 聚合网盘</title>
+<title>东东的R2盘</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%97%82%3C/text%3E%3C/svg%3E" />
 <style>
 :root{
@@ -238,7 +238,7 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
 <div id="login" class="login-wrap hide">
   <div class="login-card">
     <div class="logo">🗂</div>
-    <h1 id="loginTitle">进入 PAN R2</h1>
+    <h1 id="loginTitle">进入 东东的R2盘</h1>
     <div class="mut" id="loginHint">多账号 R2 聚合网盘</div>
     <div class="login-tabs">
       <button id="tabFront" class="on" onclick="switchMode('front')">前台访问</button>
@@ -273,7 +273,7 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
   <aside class="side" id="side">
     <div class="brand">
       <div class="mk">🗂</div>
-      <div><b>PAN R2</b><small>AGGREGATE DRIVE</small></div>
+      <div><b>东东的R2盘</b><small>AGGREGATE DRIVE</small></div>
     </div>
     <nav class="nav" id="nav"></nav>
     <div class="side-foot">
@@ -1708,6 +1708,23 @@ async function tgRefresh() {
 }
 
 boot();
+
+/* 标题彩蛋：首次进入是站名，切走时说句「不要走」，回来时喊「欢迎肥来」 */
+const TITLE_BASE = '东东的R2盘';
+const TITLE_AWAY = 'w(°Д°)w 不要走';
+const TITLE_BACK = '♪(^∇^*)欢迎肥来';
+let titleTimer = 0;
+document.title = TITLE_BASE;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearTimeout(titleTimer);
+    document.title = TITLE_AWAY;
+  } else {
+    document.title = TITLE_BACK;
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(() => { document.title = TITLE_BASE; }, 5000);
+  }
+});
 </script>
 </body>
 </html>
