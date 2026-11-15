@@ -106,6 +106,29 @@ input::placeholder,textarea::placeholder{color:#5c6a82}
 .nav a.on{background:linear-gradient(90deg,#1b2a47,#151d2e);color:#fff;box-shadow:inset 2px 0 0 var(--acc)}
 .nav a .ic{width:18px;text-align:center;font-size:14px}
 .side-foot{padding:12px;border-top:1px solid var(--line);font-size:12px}
+/* 总空间可视化（环形 + 进度条 + 账号数），前台后台都有 */
+.storage{margin-bottom:10px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;
+  background:linear-gradient(180deg,#131a28,#0f1521)}
+.storage .srow{display:flex;align-items:center;gap:11px}
+.storage .ring{position:relative;width:46px;height:46px;flex:0 0 46px}
+.storage .ring svg{display:block}
+.storage .ring .pct{position:absolute;inset:0;display:grid;place-items:center;font-size:10.5px;font-weight:650;color:var(--fg)}
+.storage .stxt{min-width:0;flex:1}
+.storage .stxt .u{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.storage .stxt .s{font-size:10.5px;color:var(--mut2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.storage .sbar{height:5px;border-radius:99px;background:#0b101a;margin-top:10px;overflow:hidden}
+.storage .sbar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .4s}
+.storage .sbar i.hot{background:linear-gradient(90deg,#f5a524,#ff7a45)}
+/* 账号页顶部总览 */
+.acc-sum{display:flex;align-items:center;gap:20px;padding:18px 20px;margin-bottom:16px}
+.acc-sum .ring{position:relative;width:96px;height:96px;flex:0 0 96px}
+.acc-sum .ring .pct{position:absolute;inset:0;display:grid;place-items:center;font-size:16px;font-weight:700}
+.acc-sum .info{flex:1;min-width:0}
+.acc-sum .info .big{font-size:19px;font-weight:650;margin-bottom:4px}
+.acc-sum .info .sub{font-size:12px;color:var(--mut);margin-bottom:10px}
+.acc-sum .sbar{height:8px;border-radius:99px;background:#0b101a;overflow:hidden}
+.acc-sum .sbar i{display:block;height:100%;background:linear-gradient(90deg,#3f7bf0,#6ea1ff)}
+.acc-sum .sbar i.hot{background:linear-gradient(90deg,#f5a524,#ff7a45)}
 .me{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;background:#111826}
 .avatar{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-size:12px;font-weight:700;
   background:linear-gradient(140deg,#37528c,#22304d);color:#cfe0ff}
@@ -254,6 +277,7 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
     </div>
     <nav class="nav" id="nav"></nav>
     <div class="side-foot">
+      <div class="storage hide" id="storage"></div>
       <div class="me">
         <div class="avatar" id="meAv">?</div>
         <div style="min-width:0">
@@ -412,6 +436,7 @@ async function boot() {
   pill.textContent = me.user.kind === 'admin' ? '管理员' : '前台 · 只读';
   pill.className = 'pill ' + (me.user.kind === 'admin' ? 'ok' : 'acc');
   renderNav();
+  refreshStorage();
   await go('files');
 }
 
@@ -422,7 +447,6 @@ function renderNav() {
     { k: 'sheets', t: '表格', ic: '📊', grp: '浏览' },
     { k: 'docs', t: '文档', ic: '📝', grp: '浏览' },
   ];
-  if (c.write) items.push({ k: 'upload', t: '上传', ic: '⬆️', grp: '编辑' });
   if (c.accounts) items.push({ k: 'accounts', t: '账号池', ic: '🔑', grp: '管理' });
   if (c.shares) items.push({ k: 'shares', t: '分享', ic: '🔗', grp: '管理' });
   if (c.users) items.push({ k: 'users', t: '用户与密码', ic: '👤', grp: '管理' });
@@ -464,6 +488,7 @@ async function go(view, opts = {}) {
   } catch (e) {
     v.innerHTML = `<div class="card" style="padding:22px"><b style="color:#ffb0b3">出错了</b><div class="mut" style="margin-top:6px">${esc(e.message)}</div></div>`;
   }
+  refreshStorage();
 }
 
 function toggleSide(on) {
@@ -492,6 +517,45 @@ function statsHtml(s) {
     <div class="stat"><div class="k">📊 表格 / 文档</div><div class="v">${s.folders ?? 0}<small>目录</small></div>
       <div class="mut" style="margin-top:4px">在线编辑区</div></div>
   </div>`;
+}
+
+/* ---------- 总空间可视化（环形 + 进度条 + 账号数） ---------- */
+function ringSvg(pct, size = 46, sw = 4, color = '#4f8cff') {
+  const r = (size - sw) / 2, c = 2 * Math.PI * r, cx = size / 2;
+  const p = Math.min(100, Math.max(0, pct || 0));
+  const on = (p > 0 ? Math.max(p, 1.2) : 0) / 100 * c;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="#1c2536" stroke-width="${sw}"/>
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
+      stroke-linecap="round" stroke-dasharray="${on} ${c}"/></svg>`;
+}
+function pctText(pct, used) {
+  if (!used) return '0%';
+  if (pct < 1) return '<1%';
+  return pct.toFixed(pct < 10 ? 1 : 0) + '%';
+}
+async function refreshStorage() {
+  let s;
+  try { s = await api('/api/stats'); } catch (e) { return; }
+  const box = $('#storage');
+  if (!box) return;
+  const cap = s.capacity || 0, used = s.used || 0;
+  const pct = cap ? Math.min(100, (used / cap) * 100) : 0;
+  const hot = pct > 85 ? 'hot' : '';
+  box.classList.remove('hide');
+  if (!s.accounts) {
+    box.innerHTML = `<div class="srow">
+        <div class="ring">${ringSvg(0)}<div class="pct">0%</div></div>
+        <div class="stxt"><div class="u">还没加账号</div><div class="s">去「账号池」添加 R2 账号</div></div>
+      </div>`;
+    return;
+  }
+  box.innerHTML = `<div class="srow">
+      <div class="ring">${ringSvg(pct)}<div class="pct">${pctText(pct, used)}</div></div>
+      <div class="stxt"><div class="u">${bytes(used)} / ${bytes(cap)}</div>
+        <div class="s">${s.accounts} 个账号 · ${s.files} 个文件</div></div>
+    </div>
+    <div class="sbar"><i class="${hot}" style="width:${Math.max(cap ? pct : 0, used ? 0.8 : 0)}%"></i></div>`;
 }
 
 /* ---------- 文件 ---------- */
@@ -937,8 +1001,20 @@ function mdMini(s) {
 async function renderAccounts() {
   const { accounts } = await api('/api/accounts');
   crumb([{ t: '账号池' }]);
+  const totalCap = accounts.reduce((a, x) => a + (x.enabled ? x.capacity_bytes : 0), 0);
+  const totalUsed = accounts.reduce((a, x) => a + (x.enabled ? x.used_bytes : 0), 0);
+  const totalPct = totalCap ? Math.min(100, (totalUsed / totalCap) * 100) : 0;
+  const enabledN = accounts.filter((x) => x.enabled).length;
   let html = `<div class="page-h"><h2>R2 账号池</h2><span class="sub">${accounts.length} 个账号，分片自动选最空的落盘</span>
     <div class="spacer"></div><button class="btn sm primary" onclick="accountForm()">＋ 添加账号</button></div>`;
+  html += `<div class="card acc-sum">
+      <div class="ring">${ringSvg(totalPct, 96, 9, totalPct > 85 ? '#ff7a45' : '#4f8cff')}<div class="pct">${pctText(totalPct, totalUsed)}</div></div>
+      <div class="info">
+        <div class="big">${accounts.length ? bytes(totalUsed) + ' / ' + bytes(totalCap) : '还没添加账号'}</div>
+        <div class="sub">${accounts.length ? `${accounts.length} 个账号（启用 ${enabledN}）· 剩余 ${bytes(Math.max(0, totalCap - totalUsed))}` : '加一个 R2 账号后，这里会显示总空间与用量'}</div>
+        <div class="sbar"><i class="${totalPct > 85 ? 'hot' : ''}" style="width:${Math.max(totalPct, totalUsed ? 0.8 : 0)}%"></i></div>
+      </div>
+    </div>`;
   html += `<div id="accForm"></div>`;
   if (!accounts.length) {
     html += `<div class="card"><div class="empty"><div class="big">🔑</div>还没有账号。到 Cloudflare → R2 → Manage R2 API Tokens 建一对 S3 凭证。</div></div>`;
@@ -964,6 +1040,7 @@ async function renderAccounts() {
     html += '</tbody></table></div>';
   }
   $('#view').innerHTML = html;
+  refreshStorage();
 }
 
 function accountForm() {
