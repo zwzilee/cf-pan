@@ -203,6 +203,7 @@ PUT chunk  ──▶ sha256(body) ──▶ blobs 里有这个 hash？
 然后 `streamDownload` 用 `ReadableStream` 一片一片 `GET`（带 `Range: bytes=a-b`）推进去，响应头回 `206 + Content-Range`。所以：
 
 - 视频在线播放可以拖动进度条（`/api/files/:id/play` 走 inline，带正确 MIME）；
+- 图片点「预览」开灯箱，点图 1:1 放大，Esc 关闭；视频播放失败时页面会给「试播前 3 分钟」（`/api/files/:id/preview` 只吐开头 256MB）和「下载看全片」两个出口；
 - 下载器断点续传只回缺失的那几片；
 - `Content-Length` 正确，浏览器能显示进度。
 

@@ -135,6 +135,8 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     return await download(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'play' && m === 'GET')
     return await play(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'preview' && m === 'GET')
+    return await previewPrefix(req, env, seg[2]);
 
   // ================= 管理员：目录 / 上传 / 删除 / 分享 =================
   if (p === '/api/folders' && m === 'POST') return await createFolder(req, env);
@@ -911,6 +913,24 @@ async function play(req: Request, env: Env, id: string): Promise<Response> {
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
   return await serveFile(req, env, file, { inline: true });
+}
+
+/** /api/files/:id/preview —— 只吐开头一段（默认 256MB），给播不动的大文件做「试播」 */
+async function previewPrefix(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAny(req, env);
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  if (!file) throw new HttpError(404, '文件不存在');
+  const cap = 256 * 1024 * 1024;
+  const end = Math.min(Number(file.size) - 1, cap - 1);
+  const stream = await streamDownload(env, String(file.id), 0, end);
+  const headers = new Headers();
+  headers.set('Content-Type', mimeFor(file.name));
+  headers.set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+  headers.set('Content-Length', String(end + 1));
+  headers.set('Accept-Ranges', 'none');
+  headers.set('Cache-Control', 'private, max-age=600');
+  headers.set('X-Preview-Prefix', String(end + 1));
+  return new Response(stream, { status: 200, headers });
 }
 
 /** 按扩展名猜 MIME；浏览器能直放的就 mp4(H.264/AAC)、webm 这几个 */

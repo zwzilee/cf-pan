@@ -217,6 +217,13 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
 .preview th,.preview td{border:1px solid var(--line);padding:6px 9px}
 .preview img{max-width:100%}
 
+/* ---------- 图片灯箱 ---------- */
+.lb{position:fixed;inset:0;z-index:9997;background:rgba(2,4,8,.93);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;padding:18px;animation:fade .15s ease}
+.lb img{max-width:100%;max-height:82vh;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.6);cursor:zoom-in;transition:.18s}
+.lb img.zoom{max-width:none;max-height:none;width:auto;cursor:zoom-out}
+.lb .lbbar{display:flex;align-items:center;gap:10px;color:#cfd8e8;font-size:13px;flex-wrap:wrap;justify-content:center}
+
 /* ---------- 播放器 ---------- */
 .player{background:#000;border-radius:var(--r);overflow:hidden;margin-bottom:14px}
 .player video,.player audio{width:100%;display:block;max-height:74vh;background:#000}
@@ -636,8 +643,10 @@ async function renderFiles() {
            ${c.write ? `<button class="btn sm danger" onclick="delDoc('${it.id}')">删除</button>` : ''}`);
       } else {
         const isVideo = /\.(mp4|webm|ogg|mov|m4v)$/i.test(it.name);
+        const isImage = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(it.name);
         html += row(it.name, `${bytes(it.size)} · ${it.chunks_count} 片 · ${when(it.created_at)}`, fileIcon(it.name),
-          `${isVideo ? `<button class="btn sm" onclick="play('${it.id}')">播放</button>` : ''}
+          `${isImage ? `<button class="btn sm" onclick="previewImage('${it.id}','${esc(it.name)}',${it.size})">预览</button>` : ''}
+           ${isVideo ? `<button class="btn sm" onclick="play('${it.id}')">播放</button>` : ''}
            <button class="btn sm primary" onclick="downloadFile('${it.id}','${esc(it.name)}',${it.size})">下载</button>
            ${c.shares ? `<button class="btn sm ghost" onclick="shareFile('${it.id}')">分享</button>` : ''}
            ${c.write ? `<button class="btn sm danger" onclick="delFile('${it.id}')">删除</button>` : ''}`);
@@ -699,13 +708,67 @@ async function renderPlayer(id) {
   const { files } = await api('/api/files' + (state.folder === null ? '' : `?folder=${state.folder}`));
   const f = files.find((x) => x.id === id);
   crumb([{ t: '文件' }, { t: f ? f.name : '播放' }]);
-  const isAudio = /\.(mp3|m4a|flac|wav|aac|ogg)$/i.test(f?.name || '');
+  const name = f?.name || '';
+  const isAudio = /\.(mp3|m4a|flac|wav|aac|ogg)$/i.test(name);
+  const isVideo = !isAudio;
   $('#view').innerHTML = `<div class="page-h"><button class="btn sm" onclick="go('files')">← 返回</button>
-    <h2 style="font-size:15px">${esc(f?.name || '')}</h2></div>
+    <h2 style="font-size:15px">${esc(name)}</h2>
+    ${f && /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(name) ? `<button class="btn sm ghost" onclick="previewImage('${id}','${esc(name)}',${f.size})">原图</button>` : ''}</div>
     <div class="player">${isAudio
-      ? `<audio controls autoplay src="/api/files/${id}/play"></audio>`
-      : `<video controls autoplay playsinline src="/api/files/${id}/play"></video>`}</div>
-    <div class="mut">支持拖动进度（Range 按片映射，跨账号也能 seek）。若画面不动，多半是 MKV/HEVC 编码，浏览器不支持。</div>`;
+      ? `<audio id="pv" controls autoplay src="/api/files/${id}/play"></audio>`
+      : `<video id="pv" controls autoplay playsinline src="/api/files/${id}/play"></video>`}</div>
+    <div class="mut" id="pvTip">支持拖动进度（Range 按片映射，跨账号也能 seek）。若画面不动，多半是 MKV/HEVC 编码，浏览器不支持。</div>
+    <div id="pvFallback" class="hide" style="margin-top:10px">
+      <div class="mut" style="color:#e0b46a">这个视频在当前网络/浏览器下播不动（编码或分段读取受限）。</div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn sm" onclick="tryPreview('${id}')">试播前 3 分钟</button>
+        <button class="btn sm ghost" onclick="downloadFile('${id}','${esc(name)}',${f ? f.size : 0})">下载看全片</button>
+      </div>
+    </div>`;
+  if (isVideo) {
+    const v = $('#pv');
+    const tip = $('#pvTip');
+    if (v) {
+      const fail = () => { $('#pvFallback').classList.remove('hide'); tip.textContent = '播放失败，可以试播开头一段，或直接下载。'; };
+      v.addEventListener('error', fail);
+      v.addEventListener('stalled', () => { if (v.readyState === 0) fail(); });
+      v.addEventListener('timeupdate', () => {
+        if (v.dataset.preview === '1' && v.currentTime >= 180) {
+          v.pause();
+          tip.textContent = '试播结束（已播放前 3 分钟）。完整内容请下载观看。';
+        }
+      });
+    }
+  }
+}
+
+/** 试播：只拉开头一段（服务器返回 200 前缀流），最多播 3 分钟 */
+function tryPreview(id) {
+  const v = $('#pv');
+  if (!v) return;
+  v.dataset.preview = '1';
+  v.src = `/api/files/${id}/preview`;
+  v.load();
+  v.play().catch(() => {});
+  $('#pvTip').textContent = '试播模式：只加载开头一段，最多播 3 分钟。';
+  toast('已切到试播模式', 'ok');
+}
+
+/** 图片灯箱：点图切换 1:1 放大，Esc 或点背景关闭 */
+function previewImage(id, name, size) {
+  const box = el(`<div class="lb">
+    <img id="lbImg" src="/api/files/${id}/play" alt="${esc(name)}">
+    <div class="lbbar"><span>${esc(name)}</span>
+      <button class="btn sm ghost" onclick="downloadFile('${id}','${esc(name)}',${size || 0})">下载</button>
+      <button class="btn sm" id="lbClose">关闭</button></div>
+  </div>`);
+  document.body.appendChild(box);
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  box.querySelector('#lbClose').onclick = close;
+  box.onclick = (e) => { if (e.target === box) close(); };
+  box.querySelector('#lbImg').onclick = (e) => { e.stopPropagation(); e.target.classList.toggle('zoom'); };
 }
 
 /* ---------- 文件操作 ---------- */
