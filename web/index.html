@@ -333,7 +333,7 @@ function dlg({ title, desc = '', value = null, placeholder = '', ok = '确定', 
     box.querySelector('#dlgNo').onclick = () => done(null);
     box.querySelector('#dlgYes').onclick = () => {
       const i = box.querySelector('#dlgIn');
-      done(i ? (i.value.trim() || null) : value === null ? null : true);
+      done(i ? (i.value.trim() || null) : true);
     };
     const i = box.querySelector('#dlgIn');
     if (i) { i.focus(); i.select(); }
@@ -1112,7 +1112,7 @@ async function renderShares() {
     html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
       <th>文件</th><th>大小</th><th>下载次数</th><th>过期</th><th></th></tr></thead><tbody>`;
     for (const s of shares) {
-      html += `<tr><td>${esc(s.fileName)}</td><td class="mut">${bytes(s.size)}</td>
+      html += `<tr data-jti="${esc(s.jti)}"><td>${esc(s.fileName)}</td><td class="mut">${bytes(s.size)}</td>
         <td>${s.used}${s.max ? ' / ' + s.max : ' / 不限'}</td>
         <td class="mut">${s.expiresAt ? new Date(s.expiresAt).toLocaleString('zh-CN') : '—'}</td>
         <td style="text-align:right"><button class="btn sm danger" onclick="revokeShare('${s.jti}')">撤销</button></td></tr>`;
@@ -1123,7 +1123,20 @@ async function renderShares() {
 }
 async function revokeShare(jti) {
   if (!(await confirmDlg('撤销分享', '这个链接立刻失效，已经发出去的也打不开。'))) return;
-  await api(`/api/shares/${jti}`, { method: 'DELETE' }); toast('已撤销', 'ok'); renderShares();
+  try {
+    await api(`/api/shares/${jti}`, { method: 'DELETE' });
+  } catch (e) {
+    // 404 = 已经没了（可能是过期 / 别处撤了），也当成功处理
+    if (!/不存在|已过期/.test(e.message)) { toast(e.message, 'err'); return; }
+  }
+  // KV 的 list 有缓存，撤销后立刻重读可能还是旧列表 —— 先就地把这行拿掉
+  const tr = document.querySelector(`tr[data-jti="${jti}"]`);
+  if (tr) tr.remove();
+  const rows = document.querySelectorAll('#view table.tb tbody tr');
+  const cnt = document.querySelector('#view .page-h .sub');
+  if (cnt) cnt.textContent = rows.length + ' 条';
+  toast('已撤销', 'ok');
+  if (!rows.length) renderShares();
 }
 
 /* ---------- 用户与前台密码 ---------- */
