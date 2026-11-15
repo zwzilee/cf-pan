@@ -104,6 +104,39 @@ pan-r2/
 - **分享链接**：`src/share.ts` 用 HMAC-SHA256 签 `token=base64url(claims).base64url(sig)`，claims 含 `{f,e,j,d?}`；`/s/:token` 免登录下载页，`?dl=1` 才真正出文件。记录放 KV `share:<jti>`，可撤销 / 限下载次数 / 到期自动清除。
 - **务必**：`JWT_SECRET` / `MASTER_KEY` 用 `wrangler secret put`，不要写进 `wrangler.toml` 或仓库。
 
+### 改管理员密码
+
+三种办法，按场景挑：
+
+1. **后台自己改（推荐）**：登录后点导航「我的账号」→ 填当前密码 + 新密码（≥8 位）两次 → 保存。走 `POST /api/password {oldPassword,newPassword}`，验旧密码、`UPDATE users SET pass_hash`、顺手重签一个新 Cookie 给你。命令行等价：
+
+   ```bash
+   curl -c c.txt -H 'Content-Type: application/json' \
+     -d '{"username":"admin","password":"旧密码"}' \
+     https://pan-r2.isophia1205.workers.dev/api/login
+   curl -b c.txt -H 'Content-Type: application/json' \
+     -d '{"oldPassword":"旧密码","newPassword":"新密码至少8位"}' \
+     https://pan-r2.isophia1205.workers.dev/api/password
+   ```
+
+2. **忘掉旧密码了 → 直接改 D1 里那行**。先把新密码算成哈希（`auth.ts` 的 `hashPassword`，PBKDF2-SHA256/10 万次，格式 `pbkdf2$100000$salt$hash`），本机用 Node 一条命令出：
+
+   ```bash
+   node -e "const c=require('crypto');const salt=c.randomBytes(16);const b=c.pbkdf2Sync('新密码',salt,100000,32,'sha256');const u=x=>x.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');console.log('pbkdf2\$100000\$'+u(salt)+'\$'+u(b))"
+   ```
+
+   然后把哈希塞进 D1（控制台 D1 → `pan_r2` → Console，或 `wrangler d1 execute`）：
+
+   ```sql
+   UPDATE users SET pass_hash = 'pbkdf2$100000$...$...' WHERE username = 'admin';
+   ```
+
+   全丢了想重来一遍：`DELETE FROM users;` 再设 `BOOTSTRAP_ADMIN=admin:新密码` 变量重新部署（`ensureBootstrap` 只在 `users` 为空时建号）。
+
+3. **想加第二个低权限账号**：往 `users` 插一行 `role='user'`，前端访问密码就是它。
+
+改完密码会影响所有已发出的旧 Cookie，但 JWT 只验签名+过期，所以旧 cookie 仍能用满 12h；要立刻踢掉全部会话就换掉 `JWT_SECRET`（`wrangler secret put JWT_SECRET`），代价是所有人都得重新登录。
+
 ---
 
 ## 七、部署步骤
