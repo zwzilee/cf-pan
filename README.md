@@ -339,6 +339,27 @@ curl -X POST https://<你的域名>/api/accounts \
 
 加够账号后，前端顶部就会显示 `N 账号 / 总容量`，和截图一样的观感。
 
+#### S3 凭证的两种拿法
+
+**A. 建一对专用 S3 凭证（推荐）**
+
+控制台 → R2 → 右侧 `Manage R2 API Tokens` → `Create API token` → 权限选 `Object Read & Write` → 桶只勾这一个 → 建完页面只显示一次，把 `Access Key ID` / `Secret Access Key` 抄下来。
+
+**B. 复用账号级 API 令牌（省事，权限大）**
+
+R2 的 S3 凭证规则很简单：`Access Key ID = 令牌 ID`，`Secret Access Key = sha256(令牌明文)`。所以手上有账号级令牌时不用再建一对：
+
+```bash
+export CF_TOKEN=cfat_xxxxxxxx
+# 令牌 ID：GET /accounts/<acc>/tokens 里那条的 id
+printf %s "$CF_TOKEN" | sha256sum     # 结果就是 Secret Access Key
+```
+
+前提是这条令牌带 `Workers R2 Storage Read` + `Workers R2 Storage Write`（权限组 id 分别是 `b4992e1108244f5d8bfbd5744320c2e1` / `bf7481a1826f439697cb59a20b22293e`）。注意：CF 的 `r2/api_tokens` 路由不认账号级令牌（返回 `404 No route matches this url`），别去那儿建。
+
+验证方式：后台账号页点「测连通」→ 返回「连通正常」就说明签名、桶名、Account ID 三者都对。
+
+
 然后在「用户与密码」页设一个**前台访问密码**（可以和后台不同），把域名 + 这个密码发给朋友，他们就能只读浏览。
 
 ### 能不能用 CF 环境变量改掉 `REPLACE_WITH_D1_ID` / `REPLACE_WITH_KV_ID` / `BOOTSTRAP_ADMIN`？

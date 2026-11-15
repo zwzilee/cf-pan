@@ -1062,6 +1062,10 @@ function accountForm() {
     <div class="row"><button class="btn primary" onclick="accCreate()">保存</button>
       <button class="btn ghost" onclick="$('#accForm').innerHTML=''">取消</button>
       <span class="mut">Secret 会用 MASTER_KEY 加密后入库</span></div>
+    <div class="mut" style="margin-top:10px;line-height:1.9">
+      凭证从哪来：Cloudflare 控制台 → R2 → 右侧 <span class="mono">Manage R2 API Tokens</span> → Create API token → 权限选 <span class="mono">Object Read &amp; Write</span> → 桶只勾这一个 → 建完只显示一次，Access Key ID / Secret Access Key 分别填到上面两栏。<br>
+      也可以复用账号级 API 令牌：<span class="mono">Access Key ID = 令牌 ID</span>，<span class="mono">Secret Access Key = sha256(令牌值)</span>（bash：<span class="mono">printf %s "$CF_TOKEN" | sha256sum</span>）。令牌需要有 <span class="mono">Workers R2 Storage Read/Write</span>。
+    </div>
   </div>`;
 }
 async function accCreate() {
