@@ -29,18 +29,10 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      - name: Render wrangler config
-        env:
-          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
-        run: node scripts/render-config.mjs
-
+      # wrangler.toml 已带真实的 D1 / KV id，直接 deploy 即可；
+      # JWT_SECRET / MASTER_KEY 是 Worker 上的 secret，deploy 不会覆盖它们。
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --config .wrangler-deploy.toml
-
-      - name: Cleanup rendered config
-        if: always()
-        run: rm -f .wrangler-deploy.toml
+        run: npx wrangler deploy

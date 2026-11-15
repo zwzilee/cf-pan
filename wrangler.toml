@@ -28,11 +28,11 @@ VISIT_KEEP_DAYS = "15"
 [[d1_databases]]
 binding = "DB"
 database_name = "pan_r2"
-database_id = "REPLACE_WITH_D1_ID"
+database_id = "22b7a53e-4526-4f50-9ea2-3abd9a55e7db"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_KV_ID"
+id = "7f86393a862e4994ae8bee814659b96c"
 
 # 定时清理访问日志：每 15 天一次（每月 1 日和 16 日 04:00 UTC）
 [triggers]
