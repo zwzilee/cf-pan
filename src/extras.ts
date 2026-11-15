@@ -95,9 +95,20 @@ export async function purgeHandler(req: Request, env: any): Promise<Response> {
       const { results } = await env.DB.prepare('SELECT id FROM folders WHERE parent_id = ?').bind(ids[i]).all();
       for (const r of results as any[]) ids.push(Number(r.id));
     }
+    // 子树里还有活着的文件/子目录 —— 说明它们是被单独还原出来的，不能跟着一起销毁
+    for (const x of ids) {
+      const live = await env.DB.prepare('SELECT COUNT(*) AS n FROM files WHERE folder_id = ? AND deleted_at IS NULL').bind(x).first();
+      if (Number((live as any)?.n || 0) > 0) {
+        throw new HttpError(409, '这个目录里还有没删掉的文件，先把它们移走或删掉再来清理');
+      }
+      const liveSub = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ? AND deleted_at IS NULL').bind(x).first();
+      if (Number((liveSub as any)?.n || 0) > 0) {
+        throw new HttpError(409, '这个目录里还有没删掉的子目录，先把它们移走或删掉再来清理');
+      }
+    }
     let files = 0;
     for (const x of ids) {
-      const { results: fs } = await env.DB.prepare('SELECT id FROM files WHERE folder_id = ?').bind(x).all();
+      const { results: fs } = await env.DB.prepare('SELECT id FROM files WHERE folder_id = ? AND deleted_at IS NOT NULL').bind(x).all();
       for (const f of fs as any[]) { await deleteFileDeep(env, String(f.id)); files++; }
     }
     for (let i = ids.length - 1; i >= 0; i--) await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(ids[i]).run();
@@ -230,12 +241,28 @@ export async function batchHandler(req: Request, env: any): Promise<Response> {
     }
   } else if (op === 'move') {
     const target = b.folderId === null || b.folderId === '' ? null : Number(b.folderId);
+    if (target !== null) {
+      const t = await env.DB.prepare('SELECT id FROM folders WHERE id=? AND deleted_at IS NULL').bind(target).first();
+      if (!t) throw new HttpError(404, '目标目录不存在');
+    }
     for (const id of ids) {
       const f = await env.DB.prepare('SELECT id FROM files WHERE id=?').bind(id).first();
       if (f) { await env.DB.prepare('UPDATE files SET folder_id=? WHERE id=?').bind(target, id).run(); n++; }
       else {
-        if (target !== null && Number(id) === target) continue;
-        await env.DB.prepare('UPDATE folders SET parent_id=? WHERE id=?').bind(target, Number(id)).run();
+        const fid = Number(id);
+        if (target !== null) {
+          if (fid === target) continue;
+          // 禁止把目录移进它自己的子树（否则会变成环，页面再也进不去）
+          let cur: number | null = target;
+          let loop = false;
+          for (let i = 0; i < 64 && cur !== null; i++) {
+            if (cur === fid) { loop = true; break; }
+            const row: any = await env.DB.prepare('SELECT parent_id FROM folders WHERE id=?').bind(cur).first();
+            cur = row ? (row.parent_id === null ? null : Number(row.parent_id)) : null;
+          }
+          if (loop) throw new HttpError(400, '不能把目录移到它自己里面');
+        }
+        await env.DB.prepare('UPDATE folders SET parent_id=? WHERE id=?').bind(target, fid).run();
         n++;
       }
     }
@@ -305,7 +332,7 @@ export async function getThumbHandler(req: Request, env: any, fileId: string): P
 export async function thumbListHandler(req: Request, env: any): Promise<Response> {
   await requireAny(req, env);
   const { results } = await env.DB.prepare(
-    "SELECT id,name,size,folder_id,created_at FROM files WHERE deleted_at IS NULL AND (lower(name) LIKE '%.jpg' OR lower(name) LIKE '%.jpeg' OR lower(name) LIKE '%.png' OR lower(name) LIKE '%.gif' OR lower(name) LIKE '%.webp' OR lower(name) LIKE '%.bmp' OR lower(name) LIKE '%.avif') ORDER BY created_at DESC LIMIT 500",
+    "SELECT id,name,size,folder_id,created_at FROM files WHERE deleted_at IS NULL AND COALESCE(enc,0) = 0 AND (lower(name) LIKE '%.jpg' OR lower(name) LIKE '%.jpeg' OR lower(name) LIKE '%.png' OR lower(name) LIKE '%.gif' OR lower(name) LIKE '%.webp' OR lower(name) LIKE '%.bmp' OR lower(name) LIKE '%.avif') ORDER BY created_at DESC LIMIT 500",
   ).all();
   const list: any[] = [];
   for (const r of results as any[]) {

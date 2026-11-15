@@ -779,7 +779,7 @@ async function deleteAccountHandler(req: Request, env: Env, id: number): Promise
 async function createShareHandler(req: Request, env: Env, fileId: string): Promise<Response> {
   const me = await requireAdmin(req, env);
   noteUser(me);
-  const file = await env.DB.prepare("SELECT id, name, size FROM files WHERE id = ? AND status = 'ready'")
+  const file = await env.DB.prepare("SELECT id, name, size FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL")
     .bind(fileId)
     .first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
@@ -1003,7 +1003,7 @@ async function completeHandler(req: Request, env: Env, uploadId: string): Promis
 // ============ 下载 / 播放 / 删除 ============
 async function download(req: Request, env: Env, id: string): Promise<Response> {
   const a = await requireAny(req, env);
-  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
   if (a && a.kind !== 'token') await touchRecent(env, Number((a as any).uid || 0), id);
   return await serveFile(req, env, file);
@@ -1012,7 +1012,7 @@ async function download(req: Request, env: Env, id: string): Promise<Response> {
 /** /api/files/:id/play —— 内联播放：正确 Content-Type + inline，支持 Range 拖动 */
 async function play(req: Request, env: Env, id: string): Promise<Response> {
   const a = await requireAny(req, env);
-  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
   if (a && a.kind !== 'token') await touchRecent(env, Number((a as any).uid || 0), id);
   return await serveFile(req, env, file, { inline: true });
@@ -1021,7 +1021,7 @@ async function play(req: Request, env: Env, id: string): Promise<Response> {
 /** /api/files/:id/preview —— 只吐开头一段（默认 256MB），给播不动的大文件做「试播」 */
 async function previewPrefix(req: Request, env: Env, id: string): Promise<Response> {
   await requireAny(req, env);
-  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
   if (file.enc) throw new HttpError(400, '加密文件没有预览（密文解不开）');
   const cap = 256 * 1024 * 1024;
@@ -1045,7 +1045,7 @@ async function renameFile(req: Request, env: Env, id: string): Promise<Response>
   if (!name) throw new HttpError(400, '文件名不能为空');
   if (name.length > 255) throw new HttpError(400, '文件名太长了');
   if (/[\\/]/.test(name)) throw new HttpError(400, '文件名里不能带斜杠');
-  const row = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  const row = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").bind(id).first<any>();
   if (!row) throw new HttpError(404, '文件不存在');
   await env.DB.prepare('UPDATE files SET name = ? WHERE id = ?').bind(name, id).run();
   return json({ ok: true, name });
