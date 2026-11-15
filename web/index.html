@@ -1364,6 +1364,8 @@ async function renderDav() {
     <div class="row wrap" style="gap:10px;align-items:flex-end">
       <div class="field" style="flex:1;min-width:160px"><label>名称</label>
         <input id="davName" class="input" placeholder="例如 客厅电视 / 手机看图"></div>
+      <div class="field" style="flex:1;min-width:140px"><label>用户名</label>
+        <input id="davUserInput" class="input mono" placeholder="dav"></div>
       <div class="field" style="flex:1;min-width:180px"><label>根目录</label>
         <select id="davFolder" class="input">${fopts}</select></div>
       <div class="field" style="width:130px"><label>有效期</label>
@@ -1423,6 +1425,7 @@ async function renderDav() {
       <td class="mut">${m.expires_at ? when(m.expires_at) : '永久'}</td>
       <td class="mut">${m.last_used_at ? when(m.last_used_at) : '—'}</td>
       <td style="white-space:nowrap;text-align:right">
+        <button class="btn sm ghost" onclick="davUserEdit('${m.id}','${esc(m.username)}')">改用户名</button>
         <button class="btn sm ghost" onclick="davRegen('${m.id}','${esc(m.name)}')">重置密钥</button>
         <button class="btn sm ghost" onclick="davToggle('${m.id}',${m.enabled ? 0 : 1})">${m.enabled ? '停用' : '启用'}</button>
         <button class="btn sm danger" onclick="davDel('${m.id}','${esc(m.name)}')">删除</button>
@@ -1443,8 +1446,9 @@ async function davCreate() {
   const ttlRaw = $('#davTtl').value;
   const ttlSec = ttlRaw === '' ? null : Number(ttlRaw);
   const readonly = $('#davRo').checked;
+  const username = ($('#davUserInput').value || '').trim() || 'dav';
   try {
-    const r = await api('/api/dav', { method: 'POST', body: JSON.stringify({ name, folderId, ttlSec, readonly }) });
+    const r = await api('/api/dav', { method: 'POST', body: JSON.stringify({ name, folderId, ttlSec, readonly, username }) });
     davNew = { url: r.url, username: r.username, key: r.key };
     toast('已创建', 'ok');
     renderDav();
@@ -1460,10 +1464,18 @@ async function davRegen(id, name) {
   if (!(await confirmDlg('重置密钥', `「${name}」的旧密钥立即失效，用旧密钥的客户端要重新填。`))) return;
   try {
     const r = await api('/api/dav/' + id + '/regen', { method: 'POST' });
-    davNew = { url: r.url, username: 'dav', key: r.key };
+    davNew = { url: r.url, username: r.username || 'dav', key: r.key };
     toast('已重置', 'ok');
     renderDav();
   } catch (e) { toast(e.message, 'err'); }
+}
+async function davUserEdit(id, cur) {
+  const u = await askText('改用户名', '客户端里填的用户名。改完立刻生效，密码（密钥）不变。', cur || 'dav', '用户名');
+  if (u === null) return;
+  const name = String(u).trim();
+  if (!name) return;
+  try { await api('/api/dav/' + id, { method: 'PATCH', body: JSON.stringify({ username: name }) }); toast('已改用户名', 'ok'); renderDav(); }
+  catch (e) { toast(e.message, 'err'); }
 }
 async function davToggle(id, on) {
   try { await api('/api/dav/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !!on }) }); renderDav(); }
@@ -1513,12 +1525,14 @@ async function renderTelegram() {
 
     <div class="card" style="padding:18px;margin-bottom:14px">
       <b>过滤与落盘位置</b>
-      <div class="field" style="margin-top:8px"><label>允许的 Chat ID（逗号分隔，留空 = 谁发都收）</label>
+      <div class="field" style="margin-top:8px"><label>允许的 Chat ID（逗号分隔；留空 = 谁都不收，先把自己的 Chat ID 加进来）</label>
         <input id="tgAllowed" class="input mono" value="${esc(tgCfg.allowed.join(', '))}" placeholder="123456789, -1001234567890"></div>
       <div class="field"><label>落到哪个目录 ID（留空 = 根目录）</label>
         <input id="tgFolder" class="input mono" value="${tgCfg.folderId ?? ''}" placeholder="例如 3"></div>
+      <div class="mut" style="margin-top:6px">当前落盘目录：<b>${esc(tgCfg.folderName || '网盘根目录')}</b>；上传的文件会在它下面按 Chat ID 建子文件夹。</div>
+      <div style="margin-top:8px"><button class="btn ghost" onclick="tgNewFolder()">＋ 新建 TG 文件夹</button></div>
       <button class="btn primary" onclick="tgSaveFolder()">保存</button>
-      <div class="mut" style="margin-top:8px">不确定自己的 Chat ID？给 bot 发一句 /start 后，去 getUpdates 看 <span class="mono">chat.id</span>；或者先留空测试。</div>
+      <div class="mut" style="margin-top:8px">不确定自己的 Chat ID？给 bot 发一句 /start 后，去 getUpdates 看 <span class="mono">chat.id</span>；留空时先给 bot 发一句，它会回你的 Chat ID，照抄到上面再加白名单。</div>
     </div>
 
     <div class="card" style="padding:18px;margin-bottom:14px">
@@ -1565,6 +1579,16 @@ async function tgClear() {
   if (!(await confirmDlg('清空 Bot Token', '清空后 TG 渠道停用，可随时再填。'))) return;
   try { await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ clearToken: true }) }); toast('已清空', 'ok'); renderTelegram(); }
   catch (e) { toast(e.message, 'err'); }
+}
+async function tgNewFolder() {
+  const name = await askText('新建 TG 文件夹', '会在网盘根目录建一个目录，并设为 TG 上传的落盘位置。', 'TG 上传', '目录名');
+  if (!name) return;
+  try {
+    const f = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name, parentId: null }) });
+    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ folderId: f.id }) });
+    toast('已创建并设为落盘目录', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function tgSaveFolder() {
   try {

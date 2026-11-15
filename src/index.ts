@@ -1140,7 +1140,8 @@ async function davCreateHandler(req: Request, env: Env): Promise<Response> {
     folderId = n;
   }
   const ttl = b.ttlSec === null || b.ttlSec === undefined || b.ttlSec === '' || b.ttlSec === 0 ? null : Number(b.ttlSec);
-  const r = await createMount(env, { name, folderId, ttlSec: Number.isFinite(ttl as number) ? (ttl as number) : null, readonly: !!b.readonly });
+  const username = typeof b.username === 'string' ? b.username : undefined;
+  const r = await createMount(env, { name, folderId, ttlSec: Number.isFinite(ttl as number) ? (ttl as number) : null, readonly: !!b.readonly, username });
   const origin = new URL(req.url).origin;
   return json({ id: r.id, username: r.username, key: r.key, expires_at: r.expires_at, url: `${origin}/dav/${r.id}/` });
 }
@@ -1152,7 +1153,7 @@ async function davRegenHandler(req: Request, env: Env, id: string): Promise<Resp
   if (!m) throw new HttpError(404, '挂载不存在');
   const r = await regenKey(env, id);
   const origin = new URL(req.url).origin;
-  return json({ key: r.key, url: `${origin}/dav/${id}/` });
+  return json({ key: r.key, username: m.username, url: `${origin}/dav/${id}/` });
 }
 
 async function davUpdateHandler(req: Request, env: Env, id: string): Promise<Response> {
@@ -1165,6 +1166,7 @@ async function davUpdateHandler(req: Request, env: Env, id: string): Promise<Res
     enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
     readonly: typeof b.readonly === 'boolean' ? b.readonly : undefined,
     name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined,
+    username: typeof b.username === 'string' ? b.username : undefined,
     ttlSec: b.ttlSec === undefined ? undefined : b.ttlSec === null ? null : Number(b.ttlSec),
   });
   return json({ ok: true });
@@ -1191,6 +1193,7 @@ async function tgConfigView(env: Env) {
     secret: c.secret,
     allowed: c.allowed,
     folderId: c.folderId,
+    folderName: c.folderId == null ? null : ((await env.DB.prepare('SELECT name FROM folders WHERE id = ?').bind(c.folderId).first<any>())?.name ?? null),
     apiBase: c.apiBase,
     customBase: c.apiBase !== 'https://api.telegram.org',
     maxBytes: c.maxBytes,

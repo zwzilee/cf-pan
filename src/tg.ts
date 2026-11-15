@@ -182,6 +182,19 @@ function pickFile(msg: any): Picked | null {
 }
 
 /** 处理一条 Telegram update；返回给 Telegram 的响应体 */
+/** 找（或建）<parent>/<chatId> 目录，返回目录 id */
+async function ensureChatFolder(env: Env, parentId: number | null, chatId: string): Promise<number> {
+  const name = String(chatId || 'unknown');
+  const row = parentId == null
+    ? await env.DB.prepare('SELECT id FROM folders WHERE parent_id IS NULL AND name = ?').bind(name).first<any>()
+    : await env.DB.prepare('SELECT id FROM folders WHERE parent_id = ? AND name = ?').bind(parentId, name).first<any>();
+  if (row?.id) return Number(row.id);
+  const r = await env.DB.prepare('INSERT INTO folders (parent_id, name, created_at) VALUES (?, ?, ?)')
+    .bind(parentId, name, new Date().toISOString())
+    .run();
+  return Number(r.meta.last_row_id);
+}
+
 export async function handleTgUpdate(env: Env, update: any): Promise<any> {
   const cfg = await getTgConfig(env);
   const msg = update?.message || update?.channel_post;
@@ -197,7 +210,12 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     }
   };
 
-  if (cfg.allowed.length && !cfg.allowed.includes(chatId)) {
+  if (!cfg.allowed.length) {
+    await reply(`还没有白名单。把你的 Chat ID 加进白名单才能上传：${chatId}`);
+    return { ok: true, skipped: 'whitelist empty: ' + chatId };
+  }
+  if (!cfg.allowed.includes(chatId)) {
+    await reply(`这个 Chat ID 不在白名单里：${chatId}`);
     return { ok: true, skipped: 'chat not allowed: ' + chatId };
   }
 
@@ -234,7 +252,8 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
 
   // 3) 落盘（单片：单片上限 100MB，超过就按 100MB 切片）
   const chunkSize = Math.min(Math.max(Math.min(size, MAX_CHUNK), MIN_CHUNK), MAX_CHUNK);
-  const up = await initUpload(env, { name: picked.name, folderId: cfg.folderId, size, chunkSize });
+  const targetFolder = await ensureChatFolder(env, cfg.folderId, chatId);
+  const up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
   const total = Math.max(1, Math.ceil(size / chunkSize));
   for (let i = 0; i < total; i++) {
     const s = i * chunkSize;

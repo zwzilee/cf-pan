@@ -92,13 +92,19 @@ function mimeFor(name: string): string {
 
 /* ------------------------------ 挂载 CRUD ------------------------------ */
 
+/** WebDAV 用户名：去空白、不能带冒号，空则回落到 dav */
+export function normUser(u?: string | null): string {
+  const s = String(u == null ? '' : u).replace(/[:\s]/g, '').trim();
+  return s || 'dav';
+}
+
 export async function createMount(
   env: Env,
-  o: { name: string; folderId: number | null; ttlSec: number | null; readonly: boolean },
+  o: { name: string; folderId: number | null; ttlSec: number | null; readonly: boolean; username?: string },
 ) {
   const id = crypto.randomUUID();
   const key = newDavKey();
-  const username = 'dav';
+  const username = normUser(o.username);
   const expires = o.ttlSec && o.ttlSec > 0 ? new Date(Date.now() + o.ttlSec * 1000).toISOString() : null;
   await env.DB.prepare(
     `INSERT INTO dav_mounts (id, name, folder_id, username, key_hash, key_prefix, readonly, enabled, expires_at, created_at)
@@ -127,7 +133,7 @@ export async function deleteMount(env: Env, id: string): Promise<void> {
   await env.DB.prepare('DELETE FROM dav_mounts WHERE id = ?').bind(id).run();
 }
 
-export async function updateMount(env: Env, id: string, o: { enabled?: boolean; readonly?: boolean; ttlSec?: number | null; name?: string }) {
+export async function updateMount(env: Env, id: string, o: { enabled?: boolean; readonly?: boolean; ttlSec?: number | null; name?: string; username?: string }) {
   const sets: string[] = [];
   const vals: any[] = [];
   if (typeof o.enabled === 'boolean') {
@@ -141,6 +147,10 @@ export async function updateMount(env: Env, id: string, o: { enabled?: boolean; 
   if (o.name !== undefined) {
     sets.push('name = ?');
     vals.push(o.name);
+  }
+  if (o.username !== undefined) {
+    sets.push('username = ?');
+    vals.push(normUser(o.username));
   }
   if (o.ttlSec !== undefined) {
     sets.push('expires_at = ?');
@@ -172,8 +182,10 @@ async function resolveAuth(req: Request, mount: DavMount, segs: string[]): Promi
     try {
       const dec = atob(hdr.slice(6).trim());
       const i = dec.indexOf(':');
+      const user = i >= 0 ? dec.slice(0, i) : '';
       const pass = i >= 0 ? dec.slice(i + 1) : dec;
-      if ((await sha256Of(pass)) === mount.key_hash) return { ok: true, rest: segs };
+      const nameOk = !user || user === mount.username;
+      if (nameOk && (await sha256Of(pass)) === mount.key_hash) return { ok: true, rest: segs };
     } catch {
       /* 解不开就当没认证 */
     }
