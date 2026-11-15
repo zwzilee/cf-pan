@@ -6,6 +6,83 @@
 
 线上实例：<https://pan-r2.isophia1205.workers.dev>
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN)
+
+> 一键部署按钮要求仓库是 **public**，且 `wrangler.toml` 里的 `database_id` / `id` 已填真实值。现在的仓库是 private、两个 id 还是占位符，所以按钮点下去会失败——先按下面「零、先拿 R2 凭证并接上账号」走一遍，或者把仓库转 public + 填好 id 再用按钮。
+
+---
+
+## 零、先拿 R2 凭证并接上账号（第一次部署必读）
+
+这一步没做，网盘能打开但一个字节也存不了。整个过程 5 分钟。
+
+### 0.1 建桶
+
+Cloudflare 控制台 → 左侧 **存储和数据库 → R2 对象存储** → **创建存储桶**。
+名字随便（本文示例 `pan`），位置选离你近的（亚洲用户选 **亚太地区 APAC**）。
+R2 必须先开通：首次进 R2 页面会要求绑卡，免费额度 10GB/月不扣钱。
+
+### 0.2 拿 Access Key ID 和 Secret Access Key
+
+这是本项目唯一必须的两个凭证 —— 没有它们，Worker 连不上桶。
+
+**方式 A：建一对专用 S3 凭证（推荐）**
+
+1. R2 概览页右侧 → **Manage R2 API Tokens**（管理 R2 API 令牌）
+2. **Create API token**（创建 API 令牌）
+3. Token name 随便填，例如 `pan-r2`
+4. Permissions 选 **Object Read & Write**（对象读取和写入）
+5. 下面 **Specify bucket**（指定存储桶）勾上你刚建的桶（例如 `pan`）——**别给全部桶**，最小权限
+6. TTL 留永久，点创建
+7. 页面**只显示这一次**，抄下两串：
+   - **Access Key ID** —— 形如 `6f34ccbc18adf024e802a1d9ee2ce4f6`（32 位十六进制）
+   - **Secret Access Key** —— 64 位十六进制，下半部分那个
+   - 关掉页面就再也看不到了；丢了只能删了重建
+
+**方式 B：复用账号级 API 令牌（省一步，权限大）**
+
+R2 的 S3 凭证规则：`Access Key ID = 令牌 ID`，`Secret Access Key = sha256(令牌明文)`。
+
+```bash
+export CF_TOKEN=cfat_xxxxxxxx          # 你的账号级 API 令牌
+# 令牌 ID：GET /accounts/<ACCOUNT_ID>/tokens 里那条的 id
+printf %s "$CF_TOKEN" | sha256sum      # 输出就是 Secret Access Key
+```
+
+前提：这条令牌要带 `Workers R2 Storage Read` + `Workers R2 Storage Write` 两个权限组。
+注意 CF 的 `r2/api_tokens` 路由**不认**账号级令牌（返回 `404 No route matches this url`），别去那儿建。
+
+### 0.3 还要准备三个值
+
+| 值 | 在哪看 | 长什么样 |
+|---|---|---|
+| **Account ID** | R2 桶详情页「S3 API」那一行取域名前缀；或控制台右侧栏「账户 ID」 | `6e9cf67839f8b1931a7cda49315bc975` |
+| **桶名** | 你 0.1 建的 | `pan` |
+| **S3 端点** | 自动拼：`https://<Account ID>.r2.cloudflarestorage.com/<桶名>` | — |
+
+### 0.4 填进账号池
+
+部署好、用管理员登录后 → 左侧 **账号池** → **＋ 添加账号**：
+
+```
+名称             主账号（随便起，自己认得出就行）
+桶名             pan
+Cloudflare Account ID   6e9cf67839f8b1931a7cda49315bc975
+Access Key ID    6f34ccbc18adf024e802a1d9ee2ce4f6
+Secret Access Key  （0.2 抄下来的 64 位）
+配额 (GB)        10
+```
+
+保存后点那一行的 **测连通** —— 回「连通正常」就说明签名、桶名、Account ID 三者全对。
+返回 403 / 签名错误，九成是 Secret 抄漏或抄错了一位；返回 404，多半是桶名或 Account ID 写错。
+
+> Secret 会用 `MASTER_KEY` 加密后入库（`enc:...`），没配 `MASTER_KEY` 则是 `plain:base64`。想真正安全就配一个：
+> `npx wrangler secret put MASTER_KEY`（任意 32 字节 base64 串）。
+
+### 0.5 多个账号就重复 0.1–0.4
+
+每个 R2 账号各建一个桶、各建一对凭证，加进同一个账号池。分片时会自动挑剩余空间最大的那个落盘。
+
 ---
 
 ## 一、为什么这么设计（关键决策）
@@ -316,6 +393,27 @@ Telegram 有两条完全不同的限制，很容易搞混：
 
 ## 八、部署步骤
 
+### 方式一：一键部署按钮（需要 public 仓库）
+
+点 README 顶部的 **Deploy to Cloudflare** 按钮，会跳到 Cloudflare 的仓库导入页，选账号 → 授权 GitHub → 直接建 Worker。
+
+用之前必须满足两条，否则会报错退出：
+
+1. **仓库是 public**（`ikiiing/CF-R2PAN` 现在是 private）。Settings → General → 最下面 Danger Zone → Change visibility → Public。
+2. **`wrangler.toml` 里两个 id 已填真实值**：`database_id`、`[ [kv_namespaces] ] id`。按钮不会替你建 D1/KV，占位符会直接让部署失败。所以先在本机跑一遍方式二的前两步，拿到 id，提交上去，再用按钮。
+
+按钮不处理 `schema.sql` 和 secrets，部署完还要手动补：
+
+```bash
+npx wrangler d1 execute pan_r2 --file=schema.sql --remote
+npx wrangler secret put JWT_SECRET
+npx wrangler secret put MASTER_KEY
+```
+
+> 也可以直接复制这个链接：`https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN`
+
+### 方式二：本地 wrangler 部署（推荐，能一次配全）
+
 ```bash
 cd pan-r2
 npm install
@@ -357,23 +455,7 @@ curl -X POST https://<你的域名>/api/accounts \
 
 #### S3 凭证的两种拿法
 
-**A. 建一对专用 S3 凭证（推荐）**
-
-控制台 → R2 → 右侧 `Manage R2 API Tokens` → `Create API token` → 权限选 `Object Read & Write` → 桶只勾这一个 → 建完页面只显示一次，把 `Access Key ID` / `Secret Access Key` 抄下来。
-
-**B. 复用账号级 API 令牌（省事，权限大）**
-
-R2 的 S3 凭证规则很简单：`Access Key ID = 令牌 ID`，`Secret Access Key = sha256(令牌明文)`。所以手上有账号级令牌时不用再建一对：
-
-```bash
-export CF_TOKEN=cfat_xxxxxxxx
-# 令牌 ID：GET /accounts/<acc>/tokens 里那条的 id
-printf %s "$CF_TOKEN" | sha256sum     # 结果就是 Secret Access Key
-```
-
-前提是这条令牌带 `Workers R2 Storage Read` + `Workers R2 Storage Write`（权限组 id 分别是 `b4992e1108244f5d8bfbd5744320c2e1` / `bf7481a1826f439697cb59a20b22293e`）。注意：CF 的 `r2/api_tokens` 路由不认账号级令牌（返回 `404 No route matches this url`），别去那儿建。
-
-验证方式：后台账号页点「测连通」→ 返回「连通正常」就说明签名、桶名、Account ID 三者都对。
+见文首 **「零、先拿 R2 凭证并接上账号」**（0.2 节），步骤、字段、报错对照都在那儿。
 
 
 然后在「用户与密码」页设一个**前台访问密码**（可以和后台不同），把域名 + 这个密码发给朋友，他们就能只读浏览。
