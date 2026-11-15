@@ -1,16 +1,21 @@
 name: Deploy to Cloudflare Workers
 
+# 什么时候跑：
+#   - push 到 main（也就是"更新代码 → 自动推送 CF"）
+#   - 也可以在 Actions 页面手动点 "Run workflow"
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+# 同一个分支连推多次时，取消上一次还在跑的，省额度也避免旧代码后部署覆盖新代码
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   deploy:
+    name: Build & Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -29,10 +34,25 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      # wrangler.toml 已带真实的 D1 / KV id，直接 deploy 即可；
-      # JWT_SECRET / MASTER_KEY 是 Worker 上的 secret，deploy 不会覆盖它们。
+      # wrangler.toml 里已经写了真实的 D1 / KV id，直接 deploy 就行；
+      # JWT_SECRET / MASTER_KEY 是挂在 Worker 上的 secret，wrangler deploy 不会覆盖它们。
       - name: Deploy
+        id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy
+
+      # 部署完打一下健康检查，挂了就在 Actions 里直接红，不用等用户发现
+      - name: Smoke test
+        run: |
+          set -e
+          URL="https://pan-r2.isophia1205.workers.dev/api/health"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/health.json -w '%{http_code}' "$URL" || true)
+            if [ "$code" = "200" ]; then
+              echo "health OK:"; cat /tmp/health.json; exit 0
+            fi
+            echo "try $i -> HTTP $code, retrying in 5s"; sleep 5
+          done
+          echo "health check failed"; cat /tmp/health.json || true; exit 1

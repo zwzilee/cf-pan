@@ -465,25 +465,51 @@ curl -X POST https://<你的域名>/api/accounts \
 
 然后在「用户与密码」页设一个**前台访问密码**（可以和后台不同），把域名 + 这个密码发给朋友，他们就能只读浏览。
 
-### 方式三：push 自动部署（CI）
+### 方式三：push 自动部署（GitHub Actions）
 
-仓库里已经放好 `.github/workflows/deploy.yml`：往 `main` 推一次 → `npm ci` + `tsc --noEmit` + `npx wrangler deploy`，全自动。私库一样能跑。
+仓库里已经放好 `.github/workflows/deploy.yml`，**往 `main` 推一次就自动部署到 Cloudflare**，不用再在本机跑 wrangler。私库一样能跑。
 
-**它依赖两样东西，缺一不可：**
+它每次做这几步：
 
-1. **仓库 Secrets**：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`。
-   - `Settings → Secrets and variables → Actions → New repository secret`，两个都加上。
-   - `CLOUDFLARE_API_TOKEN` 要能部署 Workers（权限 `Account → Workers Scripts: Edit`）；`CLOUDFLARE_ACCOUNT_ID` 是账号 ID（控制台右侧那串 hex）。
-   - `wrangler.toml` 里已经写了真实的 D1 / KV id，所以 workflow 不用再传 `D1_DATABASE_ID` / `KV_NAMESPACE_ID`；`JWT_SECRET` / `MASTER_KEY` 是 Worker 上的 secret，`wrangler deploy` 不会覆盖，部署后依然在。
-2. **这个 GitHub 账号的 Actions 是开着的**。GitHub 有个账号级开关，关掉时所有仓库的 workflow 都不跑，API 直接回：
-   ```
-   {"message":"Actions has been disabled for this user.","status":"422"}
-   ```
-   去 `github.com/settings` → 侧栏 **Actions → General** 确认允许；组织/企业账号还要看组织策略有没有禁。没开时 `Actions` 标签页会显示 "Workflows aren't being run on this repository"。
+1. `actions/checkout` 拉代码 → Node 20 + `npm ci`
+2. `npx tsc --noEmit` 类型不过就直接红，不会把坏代码推上线
+3. `npx wrangler deploy` 部署（`JWT_SECRET` / `MASTER_KEY` 是 Worker 上的 secret，deploy 不会覆盖）
+4. `curl /api/health` 打一次健康检查，重试 5 次，挂了这条也红
 
-   > 实测记录：`ikiiing` 这个账号当前 Actions 被平台禁用（`GET /repos/.../actions/permissions/access` 返回 `access_level: "none"`，手动 dispatch 也 422）。所以这套 workflow 现在推上去不会触发，得先在 GitHub 账号设置里把 Actions 打开。
+也可以在仓库 **Actions** 标签页手动点 **Run workflow** 触发，不必等 push。
 
-**不想用 GitHub Actions 就用 Cloudflare 原生的 Workers Builds**（不经过 GitHub Actions，走 Cloudflare 自己的 GitHub App）：
+#### 怎么配（一次性，做完就永久生效）
+
+**第 1 步：加两个仓库 Secret**
+
+仓库 → `Settings` → 左侧 `Secrets and variables` → `Actions` → `New repository secret`，加这两个：
+
+| Secret 名 | 值 | 说明 |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | 你的 CF API Token | 权限要含 `Account → Workers Scripts: Edit`。控制台 `My Profile → API Tokens → Create Token` 建 |
+| `CLOUDFLARE_ACCOUNT_ID` | 账号 ID | CF 控制台右侧/URL 里那串 32 位 hex，比如 `6e9cf67839f8b1931a7cda49315bc975` |
+
+> 不用再传 `D1_DATABASE_ID` / `KV_NAMESPACE_ID`——`wrangler.toml` 里已经写的是真实 id。
+
+**第 2 步：确认这个 GitHub 账号的 Actions 是开着的**
+
+GitHub 有个**账号级**开关，关掉时所有仓库的 workflow 都不触发，API 会直接回：
+
+```
+{"message":"Actions has been disabled for this user.","status":"422"}
+```
+
+到 `github.com/settings` → 侧栏 **Actions → General**，确认允许 Actions（组织/企业账号还要看组织策略有没有禁）。没开时仓库 `Actions` 标签页会显示 "Workflows aren't being run on this repository"。
+
+> 实测记录：`ikiiing` 这个账号当前 Actions 被平台禁用（`GET /repos/.../actions/permissions/access` 返回 `access_level: "none"`，手动 dispatch 也回 422）。所以这套 workflow 现在**推上去不会触发**，得先在 GitHub 账号设置里把 Actions 打开；打开后 push 一次就会自动跑。
+
+**第 3 步：验证**
+
+推一次任意提交（或手动 Run workflow），进仓库 **Actions** 标签页看 `Deploy to Cloudflare Workers` 这条：绿勾 = 已上线；红叉点进去看是哪一步挂的（typecheck / deploy / smoke test 都有独立日志）。
+
+#### 用 Cloudflare 原生的 Workers Builds（不依赖 GitHub Actions）
+
+如果 GitHub Actions 那条路走不通（比如账号被禁），换 Cloudflare 自己的 Git 集成，效果一样——push 就自动部署：
 
 1. `dash.cloudflare.com` → Workers & Pages → 点 `pan-r2` → **Settings → Builds → Connect**。
 2. 选 GitHub → 授权 `Cloudflare Workers and Pages` App（私库要在 App 的 Repository access 里勾上 `CF-R2PAN`）→ 选仓库、分支 `main`。
@@ -491,6 +517,13 @@ curl -X POST https://<你的域名>/api/accounts \
 4. 保存后 push 到 `main` 由 Cloudflare 自动构建部署，日志在 Worker 的 **Deployments / Builds** 里看。
 
 区别：GitHub Actions 用你仓库自己的 Secrets、在 GitHub 跑；Workers Builds 在 Cloudflare 侧跑、绑定沿用现有 Worker，连 id 都不用填，但要在控制台点一次授权。
+
+#### 常见坑
+
+- `npm ci` 报 `Missing: ... from lock file`：本地 `package-lock.json` 和 `package.json` 不同步，先本地 `npm install` 提交 lock 文件再推。
+- `wrangler deploy` 报 `Authentication error / code 10000`：`CLOUDFLARE_API_TOKEN` 权限不够或过期，重建一个含 `Workers Scripts: Edit` 的 token。
+- 部署成功但打不开：先手动 `curl https://<你的域名>/api/health`，再检查 `wrangler.toml` 里的 D1/KV id 是不是对应当前账号。
+
 
 ### 能不能用 CF 环境变量改掉 `REPLACE_WITH_D1_ID` / `REPLACE_WITH_KV_ID` / `BOOTSTRAP_ADMIN`？
 
