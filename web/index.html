@@ -63,6 +63,9 @@ button,input,select,textarea{font:inherit;color:inherit}
 @keyframes slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
 
 /* ---------- 页内对话框（替代原生 prompt/confirm） ---------- */
+/* 侧栏抽屉的遮罩单独一套：不能复用对话框的 .mask（z-index:9998 会把侧栏一起压暗） */
+#mask{position:fixed;inset:0;background:rgba(4,7,12,.5);z-index:55;display:block;padding:0;animation:none}
+@media(min-width:861px){#mask{display:none !important}}
 .mask{position:fixed;inset:0;background:rgba(4,7,12,.74);
   display:grid;place-items:center;z-index:9998;padding:20px;animation:fade .15s ease}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -221,7 +224,7 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
 /* ---------- 响应式 ---------- */
 .burger{display:none}
 @media(max-width:860px){
-  .side{position:fixed;inset:0 auto 0 0;z-index:60;transform:translateX(-100%);transition:.22s;box-shadow:var(--shadow)}
+  .side{position:fixed;inset:0 auto 0 0;z-index:60;transform:translateX(-100%);transition:.22s;box-shadow:var(--shadow);background:#0b101a;backdrop-filter:none}
   .side.open{transform:none}
   .burger{display:inline-flex}
   .content{padding:16px 14px 90px}
