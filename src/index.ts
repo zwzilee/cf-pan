@@ -30,6 +30,7 @@ export default {
         return json({ ok: true, user: { uid: u.uid, role: u.role } });
       }
       if (p === '/api/stats' && m === 'GET') return await stats(req, env);
+      if (p === '/api/password' && m === 'POST') return await changePassword(req, env);
 
       // ================= 账号池（管理员） =================
       if (p === '/api/accounts' && m === 'GET') return await listAccountsHandler(req, env);
@@ -106,6 +107,28 @@ async function login(req: Request, env: Env): Promise<Response> {
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL;
   const token = await signJWT({ uid: user.id, role: user.role, exp }, env.JWT_SECRET);
   return json({ ok: true, role: user.role }, { headers: { 'Set-Cookie': cookie('sid', token, SESSION_TTL) } });
+}
+
+/** 改自己的密码：验旧密码 → 换新哈希 → 重发一个 12h 的会话 Cookie */
+async function changePassword(req: Request, env: Env): Promise<Response> {
+  const me = await requireAuth(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const oldPw = String(b.oldPassword || '');
+  const newPw = String(b.newPassword || '');
+  if (!newPw || newPw.length < 8) throw new HttpError(400, '新密码至少 8 位');
+  if (!oldPw) throw new HttpError(400, '要填旧密码');
+
+  const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(me.uid).first<any>();
+  if (!user) throw new HttpError(401, '会话用户不存在');
+  if (!(await verifyPassword(oldPw, user.pass_hash))) throw new HttpError(403, '旧密码不对');
+
+  const hash = await hashPassword(newPw);
+  await env.DB.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').bind(hash, me.uid).run();
+
+  // 换完密码重签会话，其它设备上的旧 cookie 到期后作废（同一 secret，所以只能靠重新登录）
+  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL;
+  const token = await signJWT({ uid: user.id, role: user.role, exp }, env.JWT_SECRET);
+  return json({ ok: true }, { headers: { 'Set-Cookie': cookie('sid', token, SESSION_TTL) } });
 }
 
 // ============ 统计 ============

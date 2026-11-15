@@ -59,6 +59,7 @@
     <button data-tab="files" class="on">文件</button>
     <button data-tab="accounts">账号</button>
     <button data-tab="shares">分享</button>
+    <button data-tab="account">我的账号</button>
   </nav>
   <div class="spacer"></div>
   <span id="who" class="prog"></span>
@@ -125,6 +126,28 @@ function render() {
   if (state.tab === 'files') return renderFiles();
   if (state.tab === 'accounts') return renderAccounts();
   if (state.tab === 'shares') return renderShares();
+  if (state.tab === 'account') return renderAccount();
+}
+
+// ---------- 我的账号（改密码） ----------
+function renderAccount() {
+  app.innerHTML = `<div class="login"><h2>修改访问密码</h2>
+    <input id="op" type="password" placeholder="当前密码" autocomplete="current-password" />
+    <input id="np" type="password" placeholder="新密码（至少 8 位）" autocomplete="new-password" />
+    <input id="np2" type="password" placeholder="再输一次新密码" autocomplete="new-password" />
+    <div class="err" id="e"></div>
+    <button class="btn" style="width:100%" id="go">保存</button></div>`;
+  $('#go').onclick = async () => {
+    const op = $('#op').value, np = $('#np').value, np2 = $('#np2').value;
+    $('#e').textContent = '';
+    if (np !== np2) return ($('#e').textContent = '两次新密码不一致');
+    try {
+      await jpost('/password', { oldPassword: op, newPassword: np });
+      $('#e').style.color = '#5ac8a0';
+      $('#e').textContent = '改好了，下次用新密码登录';
+      $('#op').value = $('#np').value = $('#np2').value = '';
+    } catch (err) { $('#e').style.color = ''; $('#e').textContent = err.message; }
+  };
 }
 
 // ---------- 文件 ----------

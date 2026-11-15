@@ -13,8 +13,9 @@ binding = "ASSETS"
 
 [vars]
 PUBLIC_APP_NAME = "PAN R2"
-# 首次部署：管理员账号，形如 "admin:你的密码"。创建后会写入 D1，之后可从控制台删掉这行
-BOOTSTRAP_ADMIN = "admin:change-me-now"
+# 首次部署：管理员账号，形如 "admin:你的密码"。建议用环境变量 BOOTSTRAP_ADMIN 传入
+# （npm run deploy:env），建好管理员后保持空字符串，别把真实密码写进这个文件
+BOOTSTRAP_ADMIN = ""
 # JWT 签名密钥请用 secret 设置，不要写在这里：
 #   npx wrangler secret put JWT_SECRET
 #   npx wrangler secret put MASTER_KEY   # 可选：加密账号密钥，强烈建议
