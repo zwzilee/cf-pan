@@ -8,7 +8,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN)
 
-> 一键部署按钮要求仓库是 **public**，且 `wrangler.toml` 里的 `database_id` / `id` 已填真实值。现在的仓库是 private、两个 id 还是占位符，所以按钮点下去会失败——先按下面「零、先拿 R2 凭证并接上账号」走一遍，或者把仓库转 public + 填好 id 再用按钮。
+> 一键部署按钮**私库也能用**——前提是你自己点、且 Cloudflare Workers & Pages GitHub App 已授权这个仓库，详见「八、部署步骤 → 方式一」。
 
 ---
 
@@ -393,16 +393,19 @@ Telegram 有两条完全不同的限制，很容易搞混：
 
 ## 八、部署步骤
 
-### 方式一：一键部署按钮（需要 public 仓库）
+### 方式一：一键部署按钮（私库也能用）
 
-点 README 顶部的 **Deploy to Cloudflare** 按钮，会跳到 Cloudflare 的仓库导入页，选账号 → 授权 GitHub → 直接建 Worker。
+点 README 顶部的 **Deploy to Cloudflare** 按钮，会跳到 `dash.cloudflare.com` 的 Workers 创建页（`?to=/:account/workers-and-pages/create/deploy-to-workers&repository=...`），后面就是标准的「从 Git 导入」流程。
 
-用之前必须满足两条，否则会报错退出：
+**私库可以，前提是这三条：**
 
-1. **仓库是 public**（`ikiiing/CF-R2PAN` 现在是 private）。Settings → General → 最下面 Danger Zone → Change visibility → Public。
-2. **`wrangler.toml` 里两个 id 已填真实值**：`database_id`、`[ [kv_namespaces] ] id`。按钮不会替你建 D1/KV，占位符会直接让部署失败。所以先在本机跑一遍方式二的前两步，拿到 id，提交上去，再用按钮。
+1. 点按钮的是 **你自己**（有那个私库的访问权）。Cloudflare 是把仓库克隆进**你**的 GitHub 账号再构建，所以对你本人来说，私库和公库没区别。
+2. **Cloudflare Workers & Pages GitHub App 已安装并授权这个私库**：GitHub → Settings → Applications → Installed GitHub Apps → `Cloudflare Workers and Pages` → Configure → 在 Repository access 里把 `CF-R2PAN` 加进去。不装/没授权就会卡在 `Cloning repository… Failed: error occurred while fetching repository`。
+3. `wrangler.toml` 里两个 id 已填真实值：`database_id`、`[[kv_namespaces]] id`。一键流程会**自动创建** D1/KV（它读 wrangler 配置来 provision），但占位符会让它判断不出要建什么，直接失败。所以要么先在本机跑一遍方式二的前两步拿到 id 再提交，要么把这两个字段删掉让它自己建（建完 Cloudflare 会把真实 id 写回它克隆出来的那份配置里）。
 
-按钮不处理 `schema.sql` 和 secrets，部署完还要手动补：
+> 官方文档写「Private repositories: Repositories must be public」——那说的是**别人**点你 README 上的按钮：他们拿不到你的私库，克隆必失败。你自己点自己的按钮不在这个限制里。这也是为什么它必须登录 `dash.cloudflare.com` 才能继续。参考 [Deploy to Cloudflare buttons 文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)、[GitHub 集成说明](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/)。
+
+按钮流程不跑 `schema.sql`，也不设 secrets，部署完还要手动补：
 
 ```bash
 npx wrangler d1 execute pan_r2 --file=schema.sql --remote
@@ -410,7 +413,9 @@ npx wrangler secret put JWT_SECRET
 npx wrangler secret put MASTER_KEY
 ```
 
-> 也可以直接复制这个链接：`https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN`
+> 直接复制链接：`https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN`
+>
+> 如果按钮在私库上还是报 `fetching repository` 失败，走等价的手动路径：`dash.cloudflare.com` → Workers & Pages → Create application → **Connect to Git** → GitHub → 选 `CF-R2PAN`（这条本来就支持私库，选仓库列表里能看到私库就说明 App 授权没问题）。
 
 ### 方式二：本地 wrangler 部署（推荐，能一次配全）
 
