@@ -1263,8 +1263,10 @@ async function tgChannelsHandler(req: Request, env: Env): Promise<Response> {
 async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response> {
   await requireAdmin(req, env);
   const b = (await req.json().catch(() => ({}))) as any;
-  const name = String(b.name || '').trim();
-  if (!name) throw new HttpError(400, '名称不能为空');
+  const botUsername = String(b.botUsername || '').trim();
+  // 通道没有单独的名称：名称就是 TG 用户名
+  const name = String(b.name || botUsername).trim();
+  if (!name) throw new HttpError(400, 'TG 用户名不能为空');
   let folderId: number | null = null;
   if (b.folderId !== undefined && b.folderId !== null && b.folderId !== '' && b.folderId !== 'root') {
     const n = Number(b.folderId);
@@ -1275,7 +1277,7 @@ async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response>
   const ch = await createChannel(env, {
     name,
     folderId,
-    botUsername: typeof b.botUsername === 'string' ? b.botUsername : '',
+    botUsername,
     allowedRaw: typeof b.allowedRaw === 'string' ? b.allowedRaw : '',
   });
   return json({ ok: true, channel: ch });
@@ -1284,8 +1286,10 @@ async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response>
 async function tgChannelUpdateHandler(req: Request, env: Env, id: string): Promise<Response> {
   await requireAdmin(req, env);
   const b = (await req.json().catch(() => ({}))) as any;
+  // 名称 = TG 用户名：改了用户名，名称跟着改
+  const uname = typeof b.botUsername === 'string' ? b.botUsername.trim() : undefined;
   await updateChannel(env, id, {
-    name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined,
+    name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : uname || undefined,
     folderId: b.folderId === undefined ? undefined : b.folderId === '' || b.folderId === null || b.folderId === 'root' ? null : Number(b.folderId),
     botUsername: typeof b.botUsername === 'string' ? b.botUsername : undefined,
     allowedRaw: typeof b.allowedRaw === 'string' ? b.allowedRaw : undefined,
