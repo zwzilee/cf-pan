@@ -1,2 +1,0 @@
-﻿<div class="crumb" id="crumb"></div>
-      <div class="searchbox"><input id="qbox" placeholder="搜索文件名…" onkeydown="if(event.key==='Enter'){go('search',{q:this.value})}"><button class="btn sm" onclick="go('search',{q:document.getElementById('qbox').value})">搜索</button></div>

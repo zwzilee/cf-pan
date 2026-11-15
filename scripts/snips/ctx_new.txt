@@ -1,3 +1,0 @@
-﻿      if (state.can.write) menu.push(['剪切', () => setClip('cut', it)]);
-      if (state.can.write) menu.push(['复制', () => setClip('copy', it)]);
-      if (state.can.write) menu.push(['重命名', () => renameAny(it)]);

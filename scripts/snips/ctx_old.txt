@@ -1,1 +1,0 @@
-﻿      if (state.can.write) menu.push(['重命名', () => renameAny(it)]);

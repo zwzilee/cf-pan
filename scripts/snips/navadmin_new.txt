@@ -1,3 +1,0 @@
-﻿  if (c.logs) items.push({ k: 'visits', t: '访问日志', ic: '📈', grp: '管理' });
-  if (c.write) items.push({ k: 'trash', t: '回收站', ic: '🗑️', grp: '管理' });
-  if (c.write) items.push({ k: 'tags', t: '标签', ic: '🏷️', grp: '管理' });

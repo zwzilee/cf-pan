@@ -1,4 +1,0 @@
-﻿  const comp = await api(`/api/upload/${uploadId}/complete`, { method: 'POST', body: '{}' });
-  if (comp && comp.fileId && /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(file.name)) {
-    try { await makeThumbFromBlob(file, comp.fileId); } catch (e) { /* 缩略图失败不影响上传 */ }
-  }

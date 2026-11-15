@@ -1,1 +1,0 @@
-﻿  state.folders = tree.folders || [];

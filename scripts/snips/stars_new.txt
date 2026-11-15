@@ -1,3 +1,0 @@
-﻿  state.folders = tree.folders || [];
-  try { const st2 = await api('/api/stars'); state.starred = new Set((st2.files || []).map((x) => x.id)); } catch (e) { state.starred = new Set(); }
-  state.pick = new Set();

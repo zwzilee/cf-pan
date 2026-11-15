@@ -1,7 +1,0 @@
-﻿    if (view === 'account') return await renderAccount();
-    if (view === 'photos') return await renderPhotos();
-    if (view === 'stars') return await renderStars();
-    if (view === 'recent') return await renderRecent();
-    if (view === 'trash') return await renderTrash();
-    if (view === 'tags') return await renderTags();
-    if (view === 'search') return await renderSearch(opts.q || '');
