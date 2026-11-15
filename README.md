@@ -486,10 +486,49 @@ curl -X POST https://<你的域名>/api/accounts \
 
 | Secret 名 | 值 | 说明 |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | 你的 CF API Token | 权限要含 `Account → Workers Scripts: Edit`。控制台 `My Profile → API Tokens → Create Token` 建 |
+| `CLOUDFLARE_API_TOKEN` | 你的 CF API Token | 见下方「CI Token 需要哪些权限」 |
 | `CLOUDFLARE_ACCOUNT_ID` | 账号 ID | CF 控制台右侧/URL 里那串 32 位 hex，比如 `6e9cf67839f8b1931a7cda49315bc975` |
 
 > 不用再传 `D1_DATABASE_ID` / `KV_NAMESPACE_ID`——`wrangler.toml` 里已经写的是真实 id。
+
+**CI Token 需要哪些权限（不多给）**
+
+`wrangler deploy` 只做「上传脚本 + 绑定 + 触发路由」，所以给了这几项就够，别用全权限令牌：
+
+| 作用域 | 权限 | 为什么 |
+|---|---|---|
+| 账户（Account） | **Workers Scripts: Edit**（Workers Scripts Write） | 上传、发布 Worker 与静态资源，必需 |
+| 账户（Account） | Account Settings: Read | wrangler 启动时要读账号设置 |
+| 账户（Account） | Workers KV Storage: Edit | 绑定 KV（`wrangler.toml` 里有 KV） |
+| 账户（Account） | D1: Edit | 绑定 D1（`wrangler.toml` 里有 D1） |
+| 区域（Zone，限定到 `kids.us.ci`） | Workers Routes: Edit | 部署时同步自定义域名路由（若路由是你在控制台手加的，可省） |
+
+控制台建法：`My Profile → API Tokens → Create Token → Custom token`，按上表加权限；账户资源选你的账号，Zone 资源只选 `kids.us.ci`（不要选 all zones）。
+
+等价 API（`<CF_TOKEN>` 换成现有有权限的令牌，`<PERM_ID>` 用上面对应的权限组 id）：
+
+```json
+{
+  "name": "pan-r2-ci-deploy",
+  "policies": [
+    { "effect": "allow",
+      "resources": { "com.cloudflare.api.account.<ACCOUNT_ID>": "*" },
+      "permission_groups": [
+        { "id": "e086da7e2179491d91ee5f35b3ca210a" },
+        { "id": "c1fde68c7bcc44588cbb6ddbc16d6480" },
+        { "id": "09b2857d1c31407795e75e3fed8617a1" },
+        { "id": "f7f0eda5697f475c90846e879bab8666" }
+      ] },
+    { "effect": "allow",
+      "resources": { "com.cloudflare.api.account.zone.<ZONE_ID>": "*" },
+      "permission_groups": [ { "id": "28f4b596e7d643029c524985477ae49a" } ] }
+  ]
+}
+```
+
+> 账号级令牌里放 zone 权限时，`resources` 的键必须写成 `com.cloudflare.api.account.zone.<ZONE_ID>`（写成 `com.cloudflare.api.account.zone.*` 会报 `Must specify a zone for account owned tokens`）。
+
+> 该令牌创建后**只在创建响应里出现一次明文**，记得立刻存进仓库 Secret。用 `Authorization: Bearer <token>` 调 `GET /accounts/<acc>/workers/scripts/pan-r2` 返回 200 就说明权限对了。
 
 **第 2 步：确认这个 GitHub 账号的 Actions 是开着的**
 
