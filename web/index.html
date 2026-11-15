@@ -1510,7 +1510,7 @@ async function renderTelegram() {
           ? (folders.find((x) => x.id === c.folder_id) || {}).name || '#' + c.folder_id
           : '网盘根目录';
         return `<tr>
-          <td><b class="mono">${esc(c.bot_username || c.name || '-')}</b></td>
+          <td class="mono">${c.bot_username ? esc(c.bot_username) : '<span class="mut">-</span>'}</td>
           <td>${esc(fname)}</td>
           <td class="mono">${c.allowed.length ? esc(c.allowed.join(', ')) : '<span class="mut">（空，谁都不收）</span>'}</td>
           <td>${c.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill warn">停用</span>'}</td>
@@ -1522,7 +1522,7 @@ async function renderTelegram() {
             <button class="btn danger sm" onclick="tgChanDel('${c.id}','${esc(c.name)}')">删除</button>
           </div></td></tr>`;
       }).join('')
-    : '<tr><td colspan="6" class="mut">还没有通道。上面填个名称点「创建」，或点右上「＋ 新建 TG 文件夹」。</td></tr>';
+    : '<tr><td colspan="6" class="mut">还没有通道。上面填个 TG 用户名点「创建」，或点右上「＋ 新建 TG 文件夹」。</td></tr>';
   $('#view').innerHTML = `
     <div class="page-h"><h2>TG 上传</h2><span class="sub">每个通道 = 一个落盘目录 + 一份白名单；给机器人发文件自动存进来</span>
       <div class="spacer"></div>
@@ -1533,7 +1533,7 @@ async function renderTelegram() {
       <div class="row" style="justify-content:space-between;margin-bottom:10px"><b>新建通道</b>
         <span class="pill ${tgCfg.botTokenSet ? 'ok' : 'warn'}">${tgCfg.botTokenSet ? 'Bot 已配置 ' + esc(tgCfg.botTokenMasked) : '还没配 Bot Token，点右上「⚙️ 设置」'}</span></div>
       <div class="row wrap" style="gap:10px;align-items:flex-end">
-        <div class="field" style="flex:1;min-width:190px;margin:0"><label>TG 用户名</label><input id="tcUser" class="input mono" placeholder="例如 @dongdong_bot"></div>
+        <div class="field" style="flex:1;min-width:170px;margin:0"><label>TG 用户名</label><input id="tcUser" class="input mono" placeholder="例如 @dongdong_bot"></div>
         <div class="field" style="flex:1;min-width:170px;margin:0"><label>上传目录</label><select id="tcFolder" class="input">${fopts}</select></div>
         <button class="btn primary" onclick="tgCreateChannel()">创建</button>
       </div>
@@ -1563,8 +1563,19 @@ async function tgCreateChannel() {
     renderTelegram();
   } catch (e) { toast(e.message, 'err'); }
 }
+async function tgChanSetName(id, cur) {
+  const v = await askText('改管理员命名', '面板里给自己看的名字，用户看不到', cur || '', '例如 手机相册');
+  if (v === null) return;
+  const n = String(v).trim();
+  if (!n) return toast('命名不能为空', 'warn');
+  try {
+    await api('/api/tg/channels/' + id, { method: 'PATCH', body: JSON.stringify({ name: n }) });
+    toast('已保存', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
 async function tgChanRename(id, cur) {
-  const v = await askText('改 TG 用户名', '通道名称就是 TG 用户名', cur || '', '@dongdong_bot');
+  const v = await askText('改 TG 用户名', '用户访问这个 bot / 通道时用的名字', cur || '', '@dongdong_bot');
   if (v === null) return;
   const u = String(v).trim();
   if (!u) return toast('用户名不能为空', 'warn');
@@ -1676,6 +1687,25 @@ async function renderTgSettings() {
       </div>
     </div>
 
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <b>管理员 Chat ID</b>
+      <div class="mut" style="margin:6px 0 10px;line-height:1.8">
+        填在这里的 Chat ID 可以给机器人发管理员命令：<span class="mono">/stats</span>（账号池与用量）、<span class="mono">/channels</span>（通道列表）、<span class="mono">/prune</span>（清理 15 天前的访问日志）。
+      </div>
+      <div class="field"><label>管理员 Chat ID（逗号分隔，留空 = 没人能用管理员命令）</label>
+        <input id="tgAdmins" class="input mono" value="${esc((tgCfg.admins || []).join(', '))}" placeholder="123456789"></div>
+      <button class="btn primary" onclick="tgSaveAdmins()">保存</button>
+    </div>
+
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <b>机器人命令</b>
+      <div class="mut" style="margin-top:8px;line-height:1.9">
+        用户：<span class="mono">/help</span> <span class="mono">/id</span> <span class="mono">/me</span> <span class="mono">/files</span> <span class="mono">/usage</span><br>
+        管理员：<span class="mono">/stats</span> <span class="mono">/channels</span> <span class="mono">/prune</span><br>
+        不是命令的文字消息会回一份帮助；发文件（文档/视频/音频/图片）就直接存进对应通道的目录。
+      </div>
+    </div>
+
     <div class="card" style="padding:18px">
       <b>怎么用</b>
       <ol class="mut" style="margin:8px 0 0 18px;line-height:1.9">
@@ -1687,6 +1717,13 @@ async function renderTgSettings() {
       </ol>
       <div class="mut" style="margin-top:8px">Telegram 云 Bot API 单文件上限 20MB；想传更大的，用上面「自定义 Bot API 地址」接本地 Bot API Server（上限 2GB）。</div>
     </div>`;
+}
+async function tgSaveAdmins() {
+  try {
+    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ adminsRaw: $('#tgAdmins').value || '' }) });
+    toast('已保存', 'ok');
+    renderTgSettings();
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function tgSaveBase() {
   try {

@@ -1207,6 +1207,7 @@ async function tgConfigView(env: Env) {
     apiBase: c.apiBase,
     customBase: c.apiBase !== 'https://api.telegram.org',
     maxBytes: c.maxBytes,
+    admins: c.admins,
     webhookUrl: (await getSetting(env, 'tg_webhook_url')) || '',
     lastAt: (await getSetting(env, 'tg_last_at')) || '',
     cloudMax: 20 * 1024 * 1024,
@@ -1226,6 +1227,7 @@ async function tgSaveHandler(req: Request, env: Env, _ctx?: ExecutionContext): P
   if (typeof b.botToken === 'string' && b.botToken.trim()) patch.botToken = b.botToken.trim();
   if (b.clearToken) patch.botToken = '';
   if (typeof b.allowedRaw === 'string') patch.allowedRaw = b.allowedRaw;
+  if (typeof b.adminsRaw === 'string') patch.adminsRaw = b.adminsRaw;
   if (b.folderId !== undefined) patch.folderId = b.folderId === '' || b.folderId === null ? null : Number(b.folderId);
   if (typeof b.apiBase === 'string') patch.apiBase = b.apiBase;
   if (b.maxBytes !== undefined) patch.maxBytes = Number(b.maxBytes) || 0;
@@ -1264,7 +1266,7 @@ async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response>
   await requireAdmin(req, env);
   const b = (await req.json().catch(() => ({}))) as any;
   const botUsername = String(b.botUsername || '').trim();
-  // 通道没有单独的名称：名称就是 TG 用户名
+  // 通道名称就是 TG 用户名
   const name = String(b.name || botUsername).trim();
   if (!name) throw new HttpError(400, 'TG 用户名不能为空');
   let folderId: number | null = null;
@@ -1309,6 +1311,14 @@ async function tgWebhook(req: Request, env: Env, secret: string, ctx?: Execution
   if (!cfg.secret || secret !== cfg.secret) return json({ ok: false, error: 'bad secret' }, { status: 403 });
   const update = await req.json().catch(() => null);
   if (!update) return json({ ok: true });
+  // ?debug=1：把处理结果直接回给调用方（自检用；同样要 secret）
+  if (new URL(req.url).searchParams.get('debug') === '1') {
+    try {
+      return json(await handleTgUpdate(env, update));
+    } catch (e: any) {
+      return json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+    }
+  }
   const task = handleTgUpdate(env, update).catch((e: any) =>
     console.log('tg handle error: ' + (e?.message || String(e))),
   );

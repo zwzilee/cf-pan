@@ -360,7 +360,7 @@ curl -s -X POST -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/upload/$UPLOAD_ID
 
 每行有「白名单 / 停用 / 启用 / 删除」；右上角是「＋ 新建 TG 文件夹」和「⚙️ 设置」。
 
-**设置页（点右上「⚙️ 设置」进，有「← 返回」）** —— Bot Token、Webhook、自定义 Bot API 地址。多白名单已经挪到每个通道自己的「白名单」里，设置页只管机器人本身。
+**设置页（点右上「⚙️ 设置」进，有「← 返回」）** —— Bot Token、Webhook、自定义 Bot API 地址、管理员 Chat ID。多白名单已经挪到每个通道自己的「白名单」里，设置页只管机器人本身。
 
 上手顺序：
 
@@ -370,6 +370,25 @@ curl -s -X POST -H "Authorization: Bearer $PAN_TOKEN" $PAN/api/upload/$UPLOAD_ID
 4. 在 Telegram 里给 bot 发**文档 / 视频 / 音频 / 语音 / 图片**；webhook 收到后 `getFile` → 下载 → `initUpload/putChunk/completeUpload` 落盘，再回一句「✅ 已存入网盘：文件名（大小）」。
 5. 落盘规则：文件落到通道的「上传目录」下，再按 **Chat ID 建一级子文件夹**（例如 `TG 上传/123456789/xxx.mp4`），不同人发的东西自然分开；子文件夹不存在会自动建。
 6. 白名单是**多通道多白名单**：同一个 Chat ID 落在哪个通道，取决于哪个通道的白名单里有它（自上而下取第一个命中的启用通道）。哪个通道都不匹配就回一句「这个 Chat ID 不在任何通道的白名单里」，不落盘。不确定自己的 Chat ID？先给 bot 发一句，它会回给你。
+
+#### 在 Telegram 里能用的命令
+
+给 bot 发文字命令，按身份分两档（实现见 `src/tg.ts` 的 `handleTgUpdate`，命令最先处理，不受白名单限制）：
+
+| 命令 | 谁能用 | 作用 |
+| --- | --- | --- |
+| /help、/start | 任何人 | 命令说明（管理员会多看到管理员那一段） |
+| /id | 任何人 | 回你自己的 Chat ID（不知道填什么白名单时先发这个） |
+| /usage | 任何人 | 账号池总用量 / 总容量 / 文件数 |
+| /me | 白名单内 | 你在哪个通道、落到哪个目录 |
+| /files | 白名单内 | 你这个 Chat ID 目录里最近的 10 个文件 |
+| /stats | 管理员 | 账号数（含停用）、用量、文件数、用户数 |
+| /channels | 管理员 | 所有通道：用户名 → 目录 ｜白名单人数 |
+| /prune | 管理员 | 清掉 15 天前的访问日志，回删除条数 |
+
+- 「管理员」= 设置页「管理员 Chat ID」里填的 chat id（逗号分隔，留空 = 谁都用不了管理员命令）。
+- 非命令的文字消息会回一份 /help；发文件（文档/视频/音频/语音/图片）依然直接入库。
+- 自检小开关：webhook 地址后加 `?debug=1`，会把这一条 update 的处理结果直接 JSON 返回（同样要 secret），方便排错。
 
 细节与限制：
 - webhook 路由是**公开**的（Telegram 来调），身份靠 URL 里的 `secret` 认；secret 不对直接 403。收到 update 后立即 200，真正的下载/落盘在 `ctx.waitUntil()` 里做，避免 Telegram 超时重投。

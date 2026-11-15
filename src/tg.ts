@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { getSetting, setSetting } from './util';
 import { initUpload, putChunk, completeUpload, MIN_CHUNK, MAX_CHUNK } from './chunk';
+import { pruneVisits } from './visit';
 
 /**
  * Telegram 上传渠道：给自己的 Telegram 机器人发文件 → 自动落进网盘。
@@ -35,6 +36,8 @@ export interface TgConfig {
   apiBase: string;
   /** 单个文件上限；0 = 按 apiBase 自动（云 20MB / 本地 2000MB） */
   maxBytes: number;
+  /** 管理员 chat id 列表：这些 chat 能用 /stats /channels /prune */
+  admins: string[];
 }
 
 function isCustomBase(base: string): boolean {
@@ -42,13 +45,14 @@ function isCustomBase(base: string): boolean {
 }
 
 export async function getTgConfig(env: Env): Promise<TgConfig> {
-  const [token, secret, allowed, folder, base, max] = await Promise.all([
+  const [token, secret, allowed, folder, base, max, admins] = await Promise.all([
     getSetting(env, 'tg_bot_token'),
     getSetting(env, 'tg_secret'),
     getSetting(env, 'tg_allowed'),
     getSetting(env, 'tg_folder'),
     getSetting(env, 'tg_api_base'),
     getSetting(env, 'tg_max_bytes'),
+    getSetting(env, 'tg_admins'),
   ]);
   const apiBase = (base || '').trim().replace(/\/+$/, '') || DEFAULT_API_BASE;
   const autoMax = isCustomBase(apiBase) ? TG_LOCAL_MAX : TG_CLOUD_MAX;
@@ -63,14 +67,23 @@ export async function getTgConfig(env: Env): Promise<TgConfig> {
     folderId: folder && /^\d+$/.test(String(folder)) ? Number(folder) : null,
     apiBase,
     maxBytes: n > 0 ? Math.min(n, TG_LOCAL_MAX) : autoMax,
+    admins: String(admins || '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean),
   };
 }
 
-export async function saveTgConfig(env: Env, patch: Partial<TgConfig> & { allowedRaw?: string }): Promise<TgConfig> {
+export async function saveTgConfig(
+  env: Env,
+  patch: Partial<TgConfig> & { allowedRaw?: string; adminsRaw?: string },
+): Promise<TgConfig> {
   if (patch.botToken !== undefined) await setSetting(env, 'tg_bot_token', patch.botToken.trim());
   if (patch.secret !== undefined) await setSetting(env, 'tg_secret', patch.secret.trim());
   if (patch.allowedRaw !== undefined) await setSetting(env, 'tg_allowed', patch.allowedRaw.trim());
   else if (patch.allowed !== undefined) await setSetting(env, 'tg_allowed', patch.allowed.join(','));
+  if (patch.adminsRaw !== undefined) await setSetting(env, 'tg_admins', patch.adminsRaw.trim());
+  else if (patch.admins !== undefined) await setSetting(env, 'tg_admins', patch.admins.join(','));
   if (patch.folderId !== undefined) await setSetting(env, 'tg_folder', patch.folderId == null ? '' : String(patch.folderId));
   if (patch.apiBase !== undefined)
     await setSetting(env, 'tg_api_base', patch.apiBase.trim().replace(/\/+$/, ''));
@@ -210,8 +223,81 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     }
   };
 
+  const cmdHelp = (admin: boolean) => {
+    const lines = [
+      '把这个聊天里的文件直接存进网盘：文档 / 视频 / 音频 / 图片。',
+      '',
+      '用户命令：',
+      '/id —— 看自己的 Chat ID',
+      '/me —— 我落在哪个通道、哪个目录',
+      '/files —— 我这个目录里最近的 10 个文件',
+      '/usage —— 网盘总用量',
+      '/help —— 这份说明',
+    ];
+    if (admin)
+      lines.push('', '管理员命令：', '/stats —— 账号池与总用量', '/channels —— 通道列表', '/prune —— 清理 15 天前的访问日志');
+    return lines.join('\n');
+  };
+
+  // ---------------- 机器人命令 ----------------
+  const text = String(msg.text || msg.caption || '').trim();
+  const m0 = text.match(/^\/([a-zA-Z0-9_]+)(?:@\w+)?/);
+  const cmd = m0 ? m0[1].toLowerCase() : '';
+  const isAdmin = !!chatId && cfg.admins.includes(chatId);
   const chans = await listChannels(env);
   const chan = chans.find((c) => c.enabled && c.allowed.includes(chatId)) || null;
+
+  if (cmd) {
+    const done = (extra: any = {}) => ({ ok: true, cmd, ...extra });
+    if (cmd === 'start' || cmd === 'help') { await reply(cmdHelp(isAdmin)); return done(); }
+    if (cmd === 'id' || cmd === 'whoami') { await reply('你的 Chat ID：' + chatId); return done(); }
+    if (cmd === 'usage' || cmd === 'quota') {
+      const a = await env.DB.prepare('SELECT COALESCE(SUM(used_bytes),0) AS used, COALESCE(SUM(capacity_bytes),0) AS cap, COUNT(*) AS n FROM accounts WHERE enabled = 1').first<any>();
+      const f = await env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS s FROM files').first<any>();
+      await reply('网盘用量：' + fmtBytes(Number(a.used)) + ' / ' + fmtBytes(Number(a.cap)) + '（启用账号 ' + a.n + ' 个）\n文件 ' + f.n + ' 个，共 ' + fmtBytes(Number(f.s)));
+      return done();
+    }
+    if (isAdmin && cmd === 'stats') {
+      const a = await env.DB.prepare('SELECT COALESCE(SUM(used_bytes),0) AS used, COALESCE(SUM(capacity_bytes),0) AS cap, COUNT(*) AS n FROM accounts').first<any>();
+      const off = await env.DB.prepare('SELECT COUNT(*) AS n FROM accounts WHERE enabled = 0').first<any>();
+      const f = await env.DB.prepare('SELECT COUNT(*) AS n FROM files').first<any>();
+      const u = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first<any>();
+      await reply('【管理员】\n账号 ' + a.n + ' 个（停用 ' + off.n + '）\n用量 ' + fmtBytes(Number(a.used)) + ' / ' + fmtBytes(Number(a.cap)) + '\n文件 ' + f.n + ' 个\n用户 ' + u.n + ' 个');
+      return done();
+    }
+    if (isAdmin && cmd === 'channels') {
+      if (!chans.length) { await reply('还没有通道。'); return done(); }
+      const rows: string[] = [];
+      for (const c of chans) {
+        const fn = c.folder_id == null ? '（根目录）' : (((await env.DB.prepare('SELECT name FROM folders WHERE id = ?').bind(c.folder_id).first<any>()) || {}).name || '-');
+        rows.push((c.enabled ? '✅' : '⏸') + ' ' + (c.bot_username || c.name) + ' → ' + fn + ' ｜白名单 ' + c.allowed.length + ' 个');
+      }
+      await reply('通道 ' + chans.length + ' 个：\n' + rows.join('\n'));
+      return done();
+    }
+    if (isAdmin && cmd === 'prune') {
+      const n = await pruneVisits(env, 15);
+      await reply('已清理 ' + n + ' 条 15 天前的访问日志。');
+      return done();
+    }
+    if (cmd === 'me' || cmd === 'who' || cmd === 'files' || cmd === 'ls') {
+      if (!chan) { await reply('这个 Chat ID 不在任何通道的白名单里：' + chatId); return done({ skipped: 'no channel' }); }
+      const folderId = await ensureChatFolder(env, chan.folder_id, chatId);
+      if (cmd === 'me' || cmd === 'who') {
+        const pn = chan.folder_id == null ? '（根目录）' : (((await env.DB.prepare('SELECT name FROM folders WHERE id = ?').bind(chan.folder_id).first<any>()) || {}).name || '-');
+        await reply('通道：' + chan.name + '\n落盘目录：' + pn + ' / ' + chatId);
+        return done();
+      }
+      const list = await env.DB.prepare('SELECT name, size FROM files WHERE folder_id = ? ORDER BY id DESC LIMIT 10').bind(folderId).all<any>();
+      const rs = (list.results || []) as any[];
+      if (!rs.length) { await reply('这个目录里还没有文件。'); return done(); }
+      await reply('最近 ' + rs.length + ' 个文件：\n' + rs.map((x: any) => '· ' + x.name + '（' + fmtBytes(Number(x.size)) + '）').join('\n'));
+      return done();
+    }
+    await reply('不认识的命令。发 /help 看看能做什么。');
+    return done({ skipped: 'unknown cmd' });
+  }
+
   if (!chan) {
     if (!chans.length) {
       await reply(`还没有 TG 通道。先在后台上建一个「TG 文件夹」，再把 Chat ID ${chatId} 加进它的白名单。`);
@@ -223,7 +309,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
 
   const picked = pickFile(msg);
   if (!picked) {
-    await reply('发文件给我就行：文档 / 视频 / 音频 / 图片。');
+    await reply(cmdHelp(isAdmin));
     return { ok: true, skipped: 'no file' };
   }
   if (picked.size && picked.size > cfg.maxBytes) {
