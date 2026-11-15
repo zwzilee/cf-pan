@@ -656,6 +656,7 @@ async function renderFiles() {
           `${isImage ? `<button class="btn sm" onclick="previewImage('${it.id}','${esc(it.name)}',${it.size})">预览</button>` : ''}
            ${isVideo ? `<button class="btn sm" onclick="play('${it.id}')">播放</button>` : ''}
            <button class="btn sm primary" onclick="downloadFile('${it.id}','${esc(it.name)}',${it.size})">下载</button>
+           ${c.write ? `<button class="btn sm ghost" onclick="renameFile('${it.id}','${esc(it.name)}')">重命名</button>` : ''}
            ${c.shares ? `<button class="btn sm ghost" onclick="shareFile('${it.id}')">分享</button>` : ''}
            ${c.write ? `<button class="btn sm danger" onclick="delFile('${it.id}')">删除</button>` : ''}`);
       }
@@ -727,6 +728,7 @@ function wireOpen(items) {
 
 function renameAny(it) {
   if (it.kind === 'folder') return renameFolder(it.id, it.name);
+  if (it.kind === 'file') return renameFile(it.id, it.name);
   if (it.kind === 'sheet') return renameSheet(it.id, it.name);
   if (it.kind === 'doc') return renameDoc(it.id, it.name);
 }
@@ -902,6 +904,12 @@ async function newSheet() {
   const name = await askText('新建表格', '行列随时可以加', '未命名表格', '表格名'); if (!name) return;
   const r = await api('/api/sheets', { method: 'POST', body: JSON.stringify({ name, folderId: state.folder }) });
   openSheet(r.id);
+}
+async function renameFile(id, name) {
+  const n = await askText('重命名文件', '', name, '文件名');
+  if (!n || n === name) return;
+  try { await api(`/api/files/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n }) }); toast('已改名', 'ok'); go('files'); }
+  catch (e) { toast(e.message, 'err'); }
 }
 async function renameSheet(id, name) {
   const n = await askText('重命名表格', '', name, '名称');

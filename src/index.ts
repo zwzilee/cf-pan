@@ -151,6 +151,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     return await completeHandler(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'share' && m === 'POST')
     return await createShareHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && !seg[3] && m === 'PATCH') return await renameFile(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && m === 'DELETE') return await deleteFile(req, env, seg[2]);
 
   // ================= 管理员：在线表格 / 文档 =================
@@ -931,6 +932,20 @@ async function previewPrefix(req: Request, env: Env, id: string): Promise<Respon
   headers.set('Cache-Control', 'private, max-age=600');
   headers.set('X-Preview-Prefix', String(end + 1));
   return new Response(stream, { status: 200, headers });
+}
+
+/** PATCH /api/files/:id —— 改文件名（只改元数据，不动对象与分片） */
+async function renameFile(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAdmin(req, env);
+  const body = await req.json<any>().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) throw new HttpError(400, '文件名不能为空');
+  if (name.length > 255) throw new HttpError(400, '文件名太长了');
+  if (/[\\/]/.test(name)) throw new HttpError(400, '文件名里不能带斜杠');
+  const row = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
+  if (!row) throw new HttpError(404, '文件不存在');
+  await env.DB.prepare('UPDATE files SET name = ? WHERE id = ?').bind(name, id).run();
+  return json({ ok: true, name });
 }
 
 /** 按扩展名猜 MIME；浏览器能直放的就 mp4(H.264/AAC)、webm 这几个 */
