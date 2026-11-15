@@ -1,12 +1,12 @@
 import type { Env } from './types';
-import { expireTrash } from './extras';
+import { expireTrash, expireUploads } from './extras';
 import { unzipHandler } from './extras';
 import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO } from './util';
 import { hashPassword, signJWT, verifyJWT, verifyPassword } from './auth';
 import { encryptSecret } from './crypto';
 import * as store from './store';
 import * as s3 from './s3';
-import { completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, streamDownload } from './chunk';
+import { abortUpload, completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, streamDownload } from './chunk';
 import { checkShareUsable, createShareToken, getShareRecord, revokeShare, updateShare, verifyShareToken } from './share';
 import { checkLoginAllowed, clearLoginFailures, clientIp, MAX_ACCOUNT_FAILS, MAX_IP_FAILS, recordLoginFailure, WINDOW_SEC } from './ratelimit';
 import { listVisits, logVisit, lockStatus, pruneVisits, summarizeVisits } from './visit';
@@ -88,6 +88,7 @@ export default {
             if (!last || Date.now() - Date.parse(last) > 10 * 60 * 1000) {
               await setSetting(env, 'last_trash_sweep', new Date().toISOString());
               await expireTrash(env);
+              await expireUploads(env);
             }
           } catch { /* 清理失败不打扰用户 */ }
         })(),
@@ -110,6 +111,8 @@ export default {
     await setSetting(env, 'last_prune', new Date().toISOString());
     console.log(`visits pruned: ${removed} rows older than ${days} days`);
     const tr = await expireTrash(env);
+    const up = await expireUploads(env);
+    console.log(`stale uploads dropped: ${up.uploads}`);
     await setSetting(env, 'last_trash_sweep', new Date().toISOString());
     console.log(`trash expired: ${tr.files} files / ${tr.folders} folders (keep ${tr.hours}h)`);
     ctx.waitUntil(Promise.resolve());
@@ -178,6 +181,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/upload/init' && m === 'POST') return await initHandler(req, env);
   if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'chunk' && seg[4] && m === 'PUT')
     return await putChunkHandler(req, env, seg[2], Number(seg[4]));
+  if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && !seg[3] && m === 'DELETE') return await abortUploadHandler(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'upload' && seg[2] && seg[3] === 'complete' && m === 'POST')
     return await completeHandler(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'share' && m === 'POST')
@@ -1020,6 +1024,17 @@ async function putChunkHandler(req: Request, env: Env, uploadId: string, idx: nu
 async function completeHandler(req: Request, env: Env, uploadId: string): Promise<Response> {
   await requireAdmin(req, env);
   return json(await completeUpload(env, uploadId));
+}
+
+/** DELETE /api/upload/:id —— 放弃上传，把已传分片退掉 */
+async function abortUploadHandler(req: Request, env: Env, uploadId: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  try {
+    return json(await abortUpload(env, uploadId));
+  } catch (e: any) {
+    throw new HttpError(404, e?.message || '上传会话不存在或已完成');
+  }
 }
 
 // ============ 下载 / 播放 / 删除 ============

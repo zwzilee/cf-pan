@@ -1245,8 +1245,17 @@ function queueBannerHtml() {
     <b>有 ${l.length} 个没传完</b><div class="mut" style="margin:6px 0 10px">重新选同一个文件就能接着传（已传的分片不会重传）</div>
     ${l.map((r) => `<div class="qrow"><span>${esc(r.name)} · ${bytes(r.size)}</span>
       <button class="btn sm" onclick="resumePick('${r.uploadId}')">继续</button>
-      <button class="btn sm ghost" onclick="qDel('${r.uploadId}');go('upload')">丢弃</button></div>`).join('')}
+      <button class="btn sm ghost" onclick="discardUpload('${r.uploadId}','${esc(r.name).replace(/'/g,'')}')">丢弃</button></div>`).join('')}
   </div>`;
+}
+
+/** 丢弃一个没传完的上传：连服务器上已传的分片一起退掉，不然它们会一直占着额度 */
+async function discardUpload(uploadId, name) {
+  if (!(await confirmDlg('丢弃这个上传？', `「${name}」已经传上去的分片会被删掉，腾出空间。之后要传得从头开始。`))) return;
+  try { await api(`/api/upload/${uploadId}`, { method: 'DELETE' }); } catch (e) { /* 会话可能已经没了 */ }
+  qDel(uploadId);
+  toast('已丢弃', 'ok');
+  go('upload');
 }
 
 function resumePick(uploadId) {

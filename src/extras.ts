@@ -5,7 +5,7 @@
 import { requireAdmin, requireAny } from './roles';
 import { HttpError, json, nowISO, getSetting } from './util';
 import { deleteFileDeep } from './files';
-import { streamDownload, initUpload, putChunk, completeUpload } from './chunk';
+import { streamDownload, initUpload, putChunk, completeUpload, abortUpload } from './chunk';
 
 type Ctx = { uid: number; name?: string };
 
@@ -89,8 +89,18 @@ export async function restoreHandler(req: Request, env: any): Promise<Response> 
     }
     return json({ ok: true, folders: ids.length });
   }
+  const row = await env.DB.prepare('SELECT folder_id FROM files WHERE id = ?').bind(id).first();
+  const fid = (row as any)?.folder_id;
+  let movedToRoot = false;
+  if (fid !== null && fid !== undefined) {
+    const f = await env.DB.prepare('SELECT id FROM folders WHERE id = ? AND deleted_at IS NULL').bind(fid).first();
+    if (!f) {
+      await env.DB.prepare('UPDATE files SET folder_id = NULL WHERE id = ?').bind(id).run();
+      movedToRoot = true;
+    }
+  }
   await env.DB.prepare('UPDATE files SET deleted_at = NULL WHERE id = ?').bind(id).run();
-  return json({ ok: true });
+  return json({ ok: true, movedToRoot });
 }
 
 /** 回收站保留时长（小时）：默认 24，可用环境变量 TRASH_KEEP_HOURS 或后台设置覆盖 */
@@ -124,12 +134,34 @@ export async function expireTrash(env: any, hours?: number): Promise<{ files: nu
   ).bind(cutoff).all();
   let folders = 0;
   for (const d of ds as any[]) {
-    const live = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ?').bind(d.id).first();
-    if (Number((live as any)?.n || 0) > 0) continue; // 还有子目录没到期，下一轮再说
+    // 还有子目录（可能是后来单独删的、还没到期）→ 这一轮不动它
+    const sub = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ?').bind(d.id).first();
+    if (Number((sub as any)?.n || 0) > 0) continue;
+    // 里面还有文件（活着的，或还没到期的）→ 也不能删，否则那些文件会挂在已经不存在的目录上，永远看不见
+    const inside = await env.DB.prepare('SELECT COUNT(*) AS n FROM files WHERE folder_id = ?').bind(d.id).first();
+    if (Number((inside as any)?.n || 0) > 0) continue;
     await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(d.id).run();
     folders++;
   }
   return { files, folders, hours: keep };
+}
+
+/**
+ * 清掉「起过会话但没完成」的上传：超过 keep 小时还没 complete 的，把已传分片退掉再删会话。
+ * 不然用户取消一次上传，那些分片就永远占着额度、面板里还看不见。
+ */
+export async function expireUploads(env: any, hours?: number): Promise<{ uploads: number }> {
+  const keep = hours && hours > 0 ? hours : await trashKeepHours(env);
+  const cutoff = isoBefore(keep);
+  const { results } = await env.DB.prepare('SELECT id FROM uploads WHERE created_at < ? LIMIT 200').bind(cutoff).all();
+  let n = 0;
+  for (const u of results as any[]) {
+    try {
+      await abortUpload(env, String(u.id));
+      n++;
+    } catch { /* 已完成的会抛错，忽略 */ }
+  }
+  return { uploads: n };
 }
 
 export async function purgeHandler(req: Request, env: any): Promise<Response> {

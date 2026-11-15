@@ -1,6 +1,7 @@
 import type { Account, ChunkRow, Env } from './types';
 import * as s3 from './s3';
 import * as store from './store';
+import { releaseChunks } from './files';
 import { nowISO } from './util';
 
 export const DEFAULT_CHUNK = 16 * 1024 * 1024; // 16MB
@@ -91,6 +92,21 @@ export async function putChunk(env: Env, uploadId: string, idx: number, body: Ar
   ]);
 
   return { ok: true, account: acct.name, hash, etag };
+}
+
+/**
+ * 中途放弃：把已经传上去的分片释放掉（引用计数回收 + 退配额），再删掉会话。
+ * 没有这一步的话，用户取消上传后那些分片会一直占着额度，而面板里根本看不到它们。
+ */
+export async function abortUpload(env: Env, uploadId: string) {
+  const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
+  if (!up) throw new Error('上传会话不存在或已完成');
+  const r = await releaseChunks(env, uploadId);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(uploadId),
+    env.DB.prepare('DELETE FROM uploads WHERE id = ?').bind(uploadId),
+  ]);
+  return { ok: true, ...r };
 }
 
 /** 第三步：所有分片到齐后落元数据（整文件 sha256 = 各片 hash 再喂一遍） */

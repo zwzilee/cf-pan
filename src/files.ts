@@ -12,7 +12,23 @@ export interface DeleteResult {
  * 管理后台的 DELETE /api/files/:id 和 WebDAV 的 DELETE 都走这里。
  */
 export async function deleteFileDeep(env: Env, fileId: string): Promise<DeleteResult> {
-  const { results: chunks } = await env.DB.prepare('SELECT * FROM chunks WHERE file_id = ?').bind(fileId).all<any>();
+  const r = await releaseChunks(env, fileId);
+  // 缩略图存在 KV 里，不在 D1 —— 不清掉会变成看不见的残留（文件都删了还能 GET 到图）
+  try { await env.KV.delete('thumb:' + fileId); } catch { /* KV 抽风不影响主流程 */ }
+
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(fileId),
+    env.DB.prepare('DELETE FROM files WHERE id = ?').bind(fileId),
+  ]);
+  return r;
+}
+
+/**
+ * 释放某个 owner（文件 id 或上传会话 id）占的全部 R2 分片：引用计数归零的才真删、退配额。
+ * 注意：只处理 blobs 与配额，**不删 chunks 行**——调用方自己决定删 files 还是 uploads。
+ */
+export async function releaseChunks(env: Env, ownerId: string): Promise<DeleteResult> {
+  const { results: chunks } = await env.DB.prepare('SELECT * FROM chunks WHERE file_id = ?').bind(ownerId).all<any>();
   const accounts = await store.listAccounts(env);
   const byId = new Map(accounts.map((a) => [a.id, a]));
 
@@ -57,12 +73,5 @@ export async function deleteFileDeep(env: Env, fileId: string): Promise<DeleteRe
     await env.DB.prepare('DELETE FROM blobs WHERE hash = ?').bind(hash).run();
   }
 
-  // 缩略图存在 KV 里，不在 D1 —— 不清掉会变成看不见的残留（文件都删了还能 GET 到图）
-  try { await env.KV.delete('thumb:' + fileId); } catch { /* KV 抽风不影响主流程 */ }
-
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(fileId),
-    env.DB.prepare('DELETE FROM files WHERE id = ?').bind(fileId),
-  ]);
   return { removed: chunks.length, blobsDeleted: toDelete.size };
 }
