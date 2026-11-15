@@ -128,3 +128,16 @@ CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);
 CREATE INDEX IF NOT EXISTS idx_accounts_enabled ON accounts(enabled);
 CREATE INDEX IF NOT EXISTS idx_visits_created ON visits(id DESC);
 CREATE INDEX IF NOT EXISTS idx_visits_ip ON visits(ip, id DESC);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  scopes TEXT NOT NULL DEFAULT 'read',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  created_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);

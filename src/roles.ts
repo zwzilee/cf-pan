@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import { verifyJWT } from './auth';
+import { verifyApiToken } from './tokens';
 import { cookie, getCookie, Need } from './util';
 
 /**
@@ -19,7 +20,14 @@ export function publicSecret(env: Env): string {
   return env.PUBLIC_SECRET || env.JWT_SECRET;
 }
 
-export type Access = { kind: 'admin' | 'guest'; uid?: number; name?: string };
+export type Access = {
+  kind: 'admin' | 'guest' | 'token';
+  uid?: number;
+  name?: string;
+  /** 仅 kind==='token' 时有 */
+  scopes?: string[];
+  tokenId?: string;
+};
 
 /** 判断这次请求的身份；无效或没有 → null（不抛） */
 export async function readAccess(req: Request, env: Env): Promise<Access | null> {
@@ -45,7 +53,25 @@ export async function readAccess(req: Request, env: Env): Promise<Access | null>
       /* 都没有 */
     }
   }
+  // 3) API 令牌（无面板管理）：Authorization: Bearer pan_xxx
+  const auth = req.headers.get('Authorization') || '';
+  const bearer = auth.replace(/^Bearer\s+/i, '').trim();
+  if (bearer.startsWith('pan_')) {
+    try {
+      const tk = await verifyApiToken(env, bearer);
+      if (tk) return { kind: 'token', name: tk.name, scopes: tk.scopes, tokenId: tk.id };
+    } catch {
+      /* 令牌无效，落到 null */
+    }
+  }
   return null;
+}
+
+/** 有没有管理权限：后台管理员，或带 manage 范围的 API 令牌 */
+export function isManager(a: Access | null): boolean {
+  if (!a) return false;
+  if (a.kind === 'admin') return true;
+  return a.kind === 'token' && !!a.scopes && a.scopes.includes('manage');
 }
 
 /** 登录过就行（前台访客 或 管理员） */
@@ -55,11 +81,11 @@ export async function requireAny(req: Request, env: Env): Promise<Access> {
   return a;
 }
 
-/** 必须是管理员 */
+/** 必须是管理员（后台会话，或带 manage 范围的 API 令牌） */
 export async function requireAdmin(req: Request, env: Env): Promise<Access> {
   const a = await readAccess(req, env);
   if (!a) throw new Need(401, '未登录');
-  if (a.kind !== 'admin') throw new Need(403, '只有管理员能做这个操作');
+  if (!isManager(a)) throw new Need(403, '只有管理员能做这个操作');
   return a;
 }
 

@@ -151,6 +151,44 @@ pan-r2/
 - 后台「访问日志」页：上半按 IP 聚合（次数/地区/最后访问/是否被锁），下半原始记录，顶部标出「← 你」。
 - `wrangler.toml` 里 `[triggers] crons = ["0 4 1,16 * *"]`，每月 1 号与 16 号 04:00 UTC 跑一次 `scheduled()`，按 `VISIT_KEEP_DAYS`（默认 15 天）`pruneVisits`，并把时间写进 `settings.last_prune`。后台也能点「立即清理」。
 
+### API 令牌（无面板管理）
+
+后台「API 令牌」页可以签发两种令牌，给命令行、脚本、CI 用，不用走浏览器登录：
+
+| 范围 | 能干什么 |
+| --- | --- |
+| `read` | 只读：`/api/stats`、`/api/files`、`/api/tree`、下载 / 播放 |
+| `manage` | 读写全管：上传、删文件、账号池、分享、用户、日志、令牌本身 |
+
+- 令牌形如 `pan_<48 hex>`，**明文只在创建时显示一次**；库里只存 `sha256(token)`（`src/tokens.ts`），泄露了也没法从库反推。
+- 鉴权走 `Authorization: Bearer pan_xxx`。`src/roles.ts` 的 `readAccess()` 在 JWT 之外多认一种身份：`kind:'token'`，`requireAdmin()` 用 `isManager()` 判断——`admin` 会话或带 `manage` 范围的令牌都算管理员。
+- 令牌可停用（`enabled=0` 立即失效，不必删）、可删除；每次使用会刷新 `last_used_at`，后台能看到最后使用时间。
+
+```bash
+export PAN_TOKEN=pan_xxxxxxxx
+curl -H "Authorization: Bearer $PAN_TOKEN" https://pan-r2.isophia1205.workers.dev/api/stats
+# 上传：init -> 逐片 PUT -> complete
+curl -X POST -H "Authorization: Bearer $PAN_TOKEN" -H "Content-Type: application/json" \
+     -d '{"name":"a.bin","size":10485760}' https://<worker>/api/upload/init
+curl -X PUT  -H "Authorization: Bearer $PAN_TOKEN" --data-binary @part0 \
+     https://<worker>/api/upload/<uploadId>/chunk/0
+curl -X POST -H "Authorization: Bearer $PAN_TOKEN" https://<worker>/api/upload/<uploadId>/complete
+```
+
+### Telegram 上传渠道
+
+给自己的 Telegram 机器人发文件，文件自动落进网盘（`src/tg.ts`）。
+
+1. 找 `@BotFather` 建 bot，拿 token；后台「TG 上传」页填进去 → 保存（会自动生成 Webhook secret）。
+2. 点「注册 Webhook」，等价于调用 Telegram `setWebhook` 把 `https://<worker>/api/tg/webhook/<secret>` 挂上。
+3. 在 Telegram 里给 bot 发**文档 / 视频 / 音频 / 语音 / 图片**；webhook 收到后 `getFile` → 下载 → `initUpload/putChunk/completeUpload` 落盘，再回一句「✅ 已存入网盘：文件名（大小）」。
+4. 可选：填「允许的 Chat ID」（逗号分隔，留空 = 谁发都收）、「落到哪个目录 ID」（留空 = 根目录）。
+
+细节与限制：
+- webhook 路由是**公开**的（Telegram 来调），身份靠 URL 里的 `secret` 认；secret 不对直接 403。收到 update 后立即 200，真正的下载/落盘在 `ctx.waitUntil()` 里做，避免 Telegram 超时重投。
+- **Telegram Bot API 下载单文件上限 20MB**（官方限制，非本项目设置）；超过会回一句提示，让你走面板分片上传。
+- 20MB 以内一片就够（`chunkSize = min(max(size, 5MB), 100MB)`），所以这渠道本质是「小文件快速入库」。
+
 ---
 
 ## 七、在线表格与在线文档
@@ -357,3 +395,9 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | GET | `/api/visits?limit&offset&summary=1` | 访问日志 |
 | POST | `/api/visits/prune` | 立即清理 `{days}` |
 | GET | `/api/locks?u=&ip=` | 查某账号/IP 是否被锁 |
+| GET/POST | `/api/tokens` | API 令牌列表 / 新建（返回一次性明文） |
+| PATCH/DELETE | `/api/tokens/:id` | 启停 / 删除令牌 |
+| GET/POST | `/api/tg/config` | TG 渠道配置（`regenSecret` / `clearToken`） |
+| GET | `/api/tg/info` | `getWebhookInfo` + 机器人用户名 |
+| POST | `/api/tg/register` \| `/api/tg/unregister` | 挂 / 摘 Webhook |
+| POST | `/api/tg/webhook/:secret` | **公开**，Telegram 回调入口 |

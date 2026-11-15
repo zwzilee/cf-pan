@@ -450,6 +450,8 @@ function renderNav() {
   if (c.accounts) items.push({ k: 'accounts', t: '账号池', ic: '🔑', grp: '管理' });
   if (c.shares) items.push({ k: 'shares', t: '分享', ic: '🔗', grp: '管理' });
   if (c.users) items.push({ k: 'users', t: '用户与密码', ic: '👤', grp: '管理' });
+  if (c.tokens) items.push({ k: 'tokens', t: 'API 令牌', ic: '🎫', grp: '管理' });
+  if (c.telegram) items.push({ k: 'telegram', t: 'TG 上传', ic: '✈️', grp: '管理' });
   if (c.logs) items.push({ k: 'visits', t: '访问日志', ic: '📈', grp: '管理' });
   if (c.password) items.push({ k: 'account', t: '我的账号', ic: '⚙️', grp: '管理' });
 
@@ -480,6 +482,8 @@ async function go(view, opts = {}) {
     if (view === 'accounts') return await renderAccounts();
     if (view === 'shares') return await renderShares();
     if (view === 'users') return await renderUsers();
+    if (view === 'tokens') return await renderTokens();
+    if (view === 'telegram') return await renderTelegram();
     if (view === 'visits') return await renderVisits();
     if (view === 'account') return await renderAccount();
     if (view === 'player') return await renderPlayer(opts.id);
@@ -1245,6 +1249,180 @@ async function savePw() {
   if (b !== c) return toast('两次新密码不一致', 'err');
   try { await api('/api/password', { method: 'POST', body: JSON.stringify({ oldPassword: a, newPassword: b }) }); toast('密码已改', 'ok'); $('#pwOld').value = $('#pwNew').value = $('#pwNew2').value = ''; }
   catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- API 令牌（无面板管理） ---------- */
+let newToken = null;
+async function renderTokens() {
+  const d = await api('/api/tokens');
+  crumb([{ t: 'API 令牌' }]);
+  const origin = location.origin;
+  let html = `<div class="page-h"><h2>API 令牌</h2>
+    <span class="sub">给命令行 / 脚本 / CI 用，不用登录面板</span>
+    <div class="spacer"></div>
+    <button class="btn primary" onclick="tokenCreate('manage')">＋ 管理令牌</button>
+    <button class="btn" onclick="tokenCreate('read')">＋ 只读令牌</button></div>`;
+
+  if (newToken) {
+    html += `<div class="card" style="padding:16px 18px;margin-bottom:14px;border-color:#2c5c3f">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><b style="color:#7ee0a3">令牌已生成（只显示这一次）</b>
+      <span class="mut">${esc(newToken.name)} · ${esc(newToken.scopes.join(','))}</span></div>
+      <div class="row" style="gap:8px">
+        <input class="input mono" id="tokNew" value="${esc(newToken.token)}" readonly style="flex:1">
+        <button class="btn primary" onclick="copyTok()">复制</button>
+        <button class="btn ghost" onclick="newToken=null;renderTokens()">收起</button>
+      </div>
+      <div class="mut" style="margin-top:8px">用法：<code>curl -H "Authorization: Bearer &lt;令牌&gt;" ${esc(origin)}/api/stats</code></div>
+    </div>`;
+  }
+
+  html += `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div class="mut">无面板调用示例</div>
+    <div class="mono" style="margin-top:6px;font-size:12.5px;color:#9fb3d1;white-space:pre-wrap">export PAN_TOKEN=pan_xxx
+curl -H "Authorization: Bearer $PAN_TOKEN" ${esc(origin)}/api/stats
+curl -X POST -H "Authorization: Bearer $PAN_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"name":"cli","size":123}' ${esc(origin)}/api/upload/init</div></div>`;
+
+  html += `<div class="card" style="overflow:auto"><table class="tb"><thead><tr>
+    <th>名称</th><th>前缀</th><th>范围</th><th>状态</th><th>创建</th><th>最后使用</th><th></th></tr></thead><tbody>`;
+  if (!d.tokens.length) html += `<tr><td colspan="7" class="mut" style="padding:18px">还没有令牌</td></tr>`;
+  for (const t of d.tokens) {
+    html += `<tr>
+      <td><b>${esc(t.name)}</b></td>
+      <td class="mono mut">${esc(t.prefix)}…</td>
+      <td>${t.scopes.split(',').map((s) => `<span class="pill ${s === 'manage' ? 'acc' : ''}">${esc(s)}</span>`).join(' ')}</td>
+      <td>${t.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill err">停用</span>'}</td>
+      <td class="mut">${when(t.created_at)}</td>
+      <td class="mut">${t.last_used_at ? when(t.last_used_at) : '—'}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn sm ghost" onclick="tokenToggle('${t.id}',${t.enabled ? 0 : 1})">${t.enabled ? '停用' : '启用'}</button>
+        <button class="btn sm danger" onclick="tokenDel('${t.id}','${esc(t.name)}')">删除</button>
+      </td></tr>`;
+  }
+  html += '</tbody></table></div>';
+  $('#view').innerHTML = html;
+}
+async function tokenCreate(scope) {
+  const name = await askText('新建 API 令牌', scope === 'manage' ? '名字，例如 ci-deploy / 我的脚本' : '只读令牌，例如 监控脚本', '', '令牌名称');
+  if (!name) return;
+  try {
+    const r = await api('/api/tokens', { method: 'POST', body: JSON.stringify({ name, scopes: [scope] }) });
+    newToken = { token: r.token, name: r.item.name, scopes: r.item.scopes };
+    toast('已创建', 'ok'); renderTokens();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function copyTok() {
+  const v = $('#tokNew').value;
+  navigator.clipboard?.writeText(v).then(() => toast('已复制', 'ok'), () => toast('复制失败，手动选中', 'err'));
+}
+async function tokenToggle(id, on) {
+  try { await api('/api/tokens/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !!on }) }); renderTokens(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function tokenDel(id, name) {
+  if (!(await confirmDlg('删除令牌', `「${name}」删掉后立即失效，无法恢复。`))) return;
+  try { await api('/api/tokens/' + id, { method: 'DELETE' }); toast('已删除', 'ok'); newToken = null; renderTokens(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------- Telegram 上传渠道 ---------- */
+let tgCfg = null;
+async function renderTelegram() {
+  const d = await api('/api/tg/config');
+  tgCfg = d.config;
+  crumb([{ t: 'TG 上传' }]);
+  const origin = location.origin;
+  const hook = tgCfg.secret ? `${origin}/api/tg/webhook/${tgCfg.secret}` : '（先保存，会自动生成 secret）';
+  $('#view').innerHTML = `
+    <div class="page-h"><h2>TG 上传</h2><span class="sub">给机器人发文件，自动落进网盘</span></div>
+
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px"><b>机器人</b>
+        <span class="pill ${tgCfg.botTokenSet ? 'ok' : 'warn'}">${tgCfg.botTokenSet ? '已配置 ' + esc(tgCfg.botTokenMasked) : '未配置'}</span></div>
+      <div class="field"><label>Bot Token（@BotFather 给的）</label>
+        <input id="tgToken" class="input mono" placeholder="${tgCfg.botTokenSet ? '留空 = 不改' : '123456789:AAH...'}" autocomplete="off"></div>
+      <div class="row wrap" style="gap:8px">
+        <button class="btn primary" onclick="tgSave()">保存</button>
+        <button class="btn ghost" onclick="tgSave(true)">重新生成 secret</button>
+        ${tgCfg.botTokenSet ? `<button class="btn ghost" onclick="tgClear()">清空 Token</button>` : ''}
+      </div>
+      <div class="mut" style="margin-top:10px">Webhook 地址：<span class="mono">${esc(hook)}</span></div>
+    </div>
+
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>Webhook</b>
+        <span class="mut">${tgCfg.webhookUrl ? '已注册' : '未注册'}</span></div>
+      <div class="row wrap" style="gap:8px">
+        <button class="btn primary" onclick="tgRegister()">注册 Webhook</button>
+        <button class="btn ghost" onclick="tgUnregister()">删除 Webhook</button>
+        <button class="btn ghost" onclick="tgRefresh()">刷新状态</button>
+      </div>
+      <div id="tgInfo" class="mut" style="margin-top:10px"></div>
+      ${tgCfg.lastAt ? `<div class="mut" style="margin-top:6px">上次收到文件：${when(tgCfg.lastAt)}</div>` : ''}
+    </div>
+
+    <div class="card" style="padding:18px;margin-bottom:14px">
+      <b>过滤与落盘位置</b>
+      <div class="field" style="margin-top:8px"><label>允许的 Chat ID（逗号分隔，留空 = 谁发都收）</label>
+        <input id="tgAllowed" class="input mono" value="${esc(tgCfg.allowed.join(', '))}" placeholder="123456789, -1001234567890"></div>
+      <div class="field"><label>落到哪个目录 ID（留空 = 根目录）</label>
+        <input id="tgFolder" class="input mono" value="${tgCfg.folderId ?? ''}" placeholder="例如 3"></div>
+      <button class="btn primary" onclick="tgSaveFolder()">保存</button>
+      <div class="mut" style="margin-top:8px">不确定自己的 Chat ID？给 bot 发一句 /start 后，去 getUpdates 看 <span class="mono">chat.id</span>；或者先留空测试。</div>
+    </div>
+
+    <div class="card" style="padding:18px">
+      <b>怎么用</b>
+      <ol class="mut" style="margin:8px 0 0 18px;line-height:1.9">
+        <li>@BotFather 建 bot → 复制 token 填上面 → 保存</li>
+        <li>点「注册 Webhook」</li>
+        <li>在 Telegram 里给 bot 发文件（文档 / 视频 / 音频 / 图片）</li>
+        <li>文件自动进网盘，bot 回一句「✅ 已存入」</li>
+      </ol>
+      <div class="mut" style="margin-top:8px">Telegram Bot API 单文件上限 20MB；更大的请用网页面板分片上传。</div>
+    </div>`;
+}
+async function tgSave(regen = false) {
+  const patch = { regenSecret: !!regen };
+  const t = $('#tgToken').value.trim();
+  if (t) patch.botToken = t;
+  try {
+    const r = await api('/api/tg/config', { method: 'POST', body: JSON.stringify(patch) });
+    tgCfg = r.config; toast(regen ? 'secret 已重新生成，记得重新注册 Webhook' : '已保存', 'ok');
+    renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgClear() {
+  if (!(await confirmDlg('清空 Bot Token', '清空后 TG 渠道停用，可随时再填。'))) return;
+  try { await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ clearToken: true }) }); toast('已清空', 'ok'); renderTelegram(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function tgSaveFolder() {
+  try {
+    await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ allowedRaw: $('#tgAllowed').value, folderId: $('#tgFolder').value.trim() }) });
+    toast('已保存', 'ok'); renderTelegram();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function tgRegister() {
+  try { await api('/api/tg/register', { method: 'POST' }); toast('Webhook 已注册', 'ok'); renderTelegram(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function tgUnregister() {
+  try { await api('/api/tg/unregister', { method: 'POST' }); toast('已删除 Webhook', 'ok'); renderTelegram(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function tgRefresh() {
+  try {
+    const d = await api('/api/tg/info');
+    const i = d.info || {};
+    $('#tgInfo').innerHTML = i.configured
+      ? (i.error ? `<span class="pill err">${esc(i.error)}</span>`
+        : `<span class="pill ${i.url ? 'ok' : 'warn'}">${i.url ? '已挂 ' + esc(i.url) : '未挂'}</span>
+           <span class="pill">待处理 ${i.pending || 0}</span>
+           ${i.bot ? `<span class="pill acc">${esc(i.bot)}</span>` : ''}
+           ${i.lastError ? `<span class="pill err">最近错误：${esc(i.lastError)}</span>` : ''}`)
+      : '<span class="pill warn">还没填 bot token</span>';
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 boot();

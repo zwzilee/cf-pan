@@ -8,7 +8,17 @@ import { completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, stre
 import { checkShareUsable, createShareToken, revokeShare, verifyShareToken } from './share';
 import { checkLoginAllowed, clearLoginFailures, clientIp, MAX_ACCOUNT_FAILS, MAX_IP_FAILS, recordLoginFailure, WINDOW_SEC } from './ratelimit';
 import { listVisits, logVisit, lockStatus, pruneVisits, summarizeVisits } from './visit';
-import { clearAuthCookies, GUEST_TTL, publicSecret, readAccess, requireAdmin, requireAny } from './roles';
+import { clearAuthCookies, GUEST_TTL, publicSecret, readAccess, requireAdmin, requireAny, isManager } from './roles';
+import { createApiToken, listApiTokens, revokeApiToken, setApiTokenEnabled } from './tokens';
+import {
+  deleteTgWebhook,
+  getTgConfig,
+  getTgWebhookInfo,
+  newTgSecret,
+  registerTgWebhook,
+  saveTgConfig,
+  handleTgUpdate,
+} from './tg';
 import {
   createSheet,
   deleteSheet,
@@ -44,7 +54,7 @@ export default {
     currentUser = null;
     let res: Response;
     try {
-      res = await route(req, env);
+      res = await route(req, env, ctx);
     } catch (e: any) {
       if (e instanceof Need || e instanceof HttpError) {
         res = json({ error: e.message }, { status: e.status });
@@ -73,7 +83,7 @@ export default {
   },
 };
 
-async function route(req: Request, env: Env): Promise<Response> {
+async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const p = url.pathname;
   const m = req.method;
@@ -90,6 +100,10 @@ async function route(req: Request, env: Env): Promise<Response> {
     for (const c of clearAuthCookies()) res.headers.append('Set-Cookie', c);
     return res;
   }
+
+  // TG 上传渠道 webhook（Telegram 来调，靠 URL 里的 secret 认身份）
+  if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'webhook' && seg[3] && m === 'POST')
+    return await tgWebhook(req, env, seg[3], ctx);
 
   // ================= 身份 =================
   if (p === '/api/me' && m === 'GET') return await meHandler(req, env);
@@ -167,6 +181,21 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (seg[0] === 'api' && seg[1] === 'users' && seg[2] && m === 'DELETE')
     return await deleteUser(req, env, Number(seg[2]));
   if (p === '/api/front/password' && m === 'POST') return await setFrontPassword(req, env);
+
+  // ================= 管理员：API 令牌（无面板管理） =================
+  if (p === '/api/tokens' && m === 'GET') return await listTokensHandler(req, env);
+  if (p === '/api/tokens' && m === 'POST') return await createTokenHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'tokens' && seg[2] && m === 'DELETE')
+    return await revokeTokenHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'tokens' && seg[2] && m === 'PATCH')
+    return await updateTokenHandler(req, env, seg[2]);
+
+  // ================= 管理员：TG 上传渠道 =================
+  if (p === '/api/tg/config' && m === 'GET') return await tgConfigHandler(req, env);
+  if (p === '/api/tg/config' && m === 'POST') return await tgSaveHandler(req, env, ctx);
+  if (p === '/api/tg/info' && m === 'GET') return await tgInfoHandler(req, env);
+  if (p === '/api/tg/register' && m === 'POST') return await tgRegisterHandler(req, env);
+  if (p === '/api/tg/unregister' && m === 'POST') return await tgUnregisterHandler(req, env);
 
   // ================= 管理员：日志 / 锁 =================
   if (p === '/api/visits' && m === 'GET') return await visitsHandler(req, env);
@@ -271,18 +300,22 @@ async function failMessage(env: Env, username: string, ip: string): Promise<stri
 /** 我是谁：返回身份 + 能干什么，前端据此渲染前台/后台两套壳 */
 async function meHandler(req: Request, env: Env): Promise<Response> {
   const a = await readAccess(req, env);
-  if (!a) return json({ ok: true, user: null, can: emptyCaps() });
+  if (!a) return json({ ok: true, user: null, can: emptyCaps(), frontReady: !!(await frontPasswordHash(env)) });
   if (a.uid) currentUser = { uid: a.uid, username: a.name };
 
   const caps = emptyCaps();
   caps.read = true;
-  if (a.kind === 'admin') {
+  if (isManager(a)) {
     caps.read = caps.write = caps.manage = caps.accounts = caps.users = caps.logs = true;
-    caps.password = caps.shares = true;
+    caps.password = caps.shares = caps.tokens = caps.telegram = true;
   }
   return json({
     ok: true,
-    user: { kind: a.kind, name: a.name || (a.kind === 'admin' ? '管理员' : '访客'), uid: a.uid ?? 0 },
+    user: {
+      kind: a.kind,
+      name: a.name || (a.kind === 'admin' ? '管理员' : a.kind === 'token' ? '令牌' : '访客'),
+      uid: a.uid ?? 0,
+    },
     can: caps,
     frontReady: !!(await frontPasswordHash(env)),
   });
@@ -298,6 +331,8 @@ function emptyCaps() {
     logs: false,
     shares: false,
     password: false,
+    tokens: false,
+    telegram: false,
   };
 }
 
@@ -1050,5 +1085,105 @@ async function deleteDocHandler(req: Request, env: Env, id: string): Promise<Res
   const me = await requireAdmin(req, env);
   noteUser(me);
   await deleteDoc(env, id);
+  return json({ ok: true });
+}
+
+// ============ API 令牌（无面板管理） ============
+async function listTokensHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ tokens: await listApiTokens(env) });
+}
+
+async function createTokenHandler(req: Request, env: Env): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const scopes = Array.isArray(b.scopes) ? b.scopes : String(b.scopes || 'manage').split(/[\s,]+/);
+  const t = await createApiToken(env, b.name, scopes, me.name || 'admin');
+  return json({ ok: true, token: t.token, item: { id: t.id, name: t.name, prefix: t.prefix, scopes: t.scopes } });
+}
+
+async function revokeTokenHandler(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ ok: await revokeApiToken(env, id) });
+}
+
+async function updateTokenHandler(req: Request, env: Env, id: string): Promise<Response> {
+  await requireAdmin(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  if (typeof b.enabled === 'boolean') await setApiTokenEnabled(env, id, b.enabled);
+  return json({ ok: true });
+}
+
+// ============ Telegram 上传渠道 ============
+function maskToken(t: string): string {
+  if (!t) return '';
+  const i = t.indexOf(':');
+  return i > 0 ? t.slice(0, i) + ':***' + t.slice(-4) : t.slice(0, 4) + '***';
+}
+
+async function tgConfigView(env: Env) {
+  const c = await getTgConfig(env);
+  return {
+    botTokenMasked: maskToken(c.botToken),
+    botTokenSet: !!c.botToken,
+    secret: c.secret,
+    allowed: c.allowed,
+    folderId: c.folderId,
+    webhookUrl: (await getSetting(env, 'tg_webhook_url')) || '',
+    lastAt: (await getSetting(env, 'tg_last_at')) || '',
+    maxBytes: 20 * 1024 * 1024,
+  };
+}
+
+async function tgConfigHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ ok: true, config: await tgConfigView(env) });
+}
+
+async function tgSaveHandler(req: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
+  await requireAdmin(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const patch: any = {};
+  if (typeof b.botToken === 'string' && b.botToken.trim()) patch.botToken = b.botToken.trim();
+  if (b.clearToken) patch.botToken = '';
+  if (typeof b.allowedRaw === 'string') patch.allowedRaw = b.allowedRaw;
+  if (b.folderId !== undefined) patch.folderId = b.folderId === '' || b.folderId === null ? null : Number(b.folderId);
+  if (b.regenSecret) patch.secret = newTgSecret();
+  let cfg = await saveTgConfig(env, patch);
+  if (!cfg.secret) cfg = await saveTgConfig(env, { secret: newTgSecret() });
+  return json({ ok: true, config: await tgConfigView(env) });
+}
+
+async function tgInfoHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ ok: true, info: await getTgWebhookInfo(env), config: await tgConfigView(env) });
+}
+
+async function tgRegisterHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  let cfg = await getTgConfig(env);
+  if (!cfg.secret) cfg = await saveTgConfig(env, { secret: newTgSecret() });
+  const origin = new URL(req.url).origin;
+  const r = await registerTgWebhook(env, origin);
+  return json({ ok: true, url: r.url, info: await getTgWebhookInfo(env), config: await tgConfigView(env) });
+}
+
+async function tgUnregisterHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  await deleteTgWebhook(env);
+  return json({ ok: true, config: await tgConfigView(env) });
+}
+
+async function tgWebhook(req: Request, env: Env, secret: string, ctx?: ExecutionContext): Promise<Response> {
+  const cfg = await getTgConfig(env);
+  if (!cfg.secret || secret !== cfg.secret) return json({ ok: false, error: 'bad secret' }, { status: 403 });
+  const update = await req.json().catch(() => null);
+  if (!update) return json({ ok: true });
+  const task = handleTgUpdate(env, update).catch((e: any) =>
+    console.log('tg handle error: ' + (e?.message || String(e))),
+  );
+  if (ctx?.waitUntil) ctx.waitUntil(task);
+  else await task;
   return json({ ok: true });
 }
