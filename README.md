@@ -9,6 +9,8 @@
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN)
 
 > 一键部署按钮**私库也能用**——前提是你自己点、且 Cloudflare Workers & Pages GitHub App 已授权这个仓库，详见「八、部署步骤 → 方式一」。
+>
+> 🔑 **权限全表见 [PERMISSIONS.md](./PERMISSIONS.md)**：R2 凭证、部署令牌、运维令牌、GitHub Actions、Telegram、Worker 运行时绑定，要开哪些、不要开哪些、每条权限组 id 都在那里面。
 
 ---
 
@@ -505,6 +507,8 @@ curl -X POST https://<你的域名>/api/accounts \
 | 区域（Zone，限定到 `kids.us.ci`） | Workers Routes: Edit | 部署时同步自定义域名路由（若路由是你在控制台手加的，可省） |
 
 > 别只给 Workers Scripts——R2 是这个项目的数据面，只给 Workers 权限时部署脚本能传上去，但一旦涉及 R2 绑定检查 / 建 R2 凭证就会 401。最小但完整的组合是上表六条。
+
+> 完整的权限清单（含运维令牌、GitHub、Telegram、运行时绑定、反面清单）见 **[PERMISSIONS.md](./PERMISSIONS.md)**，本文只保留部署这一段。
 
 控制台建法：`My Profile → API Tokens → Create Token → Custom token`，按上表加权限；账户资源选你的账号，Zone 资源只选 `kids.us.ci`（不要选 all zones）。
 
