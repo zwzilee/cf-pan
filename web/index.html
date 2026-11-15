@@ -63,19 +63,21 @@ button,input,select,textarea{font:inherit;color:inherit}
 @keyframes slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
 
 /* ---------- 页内对话框（替代原生 prompt/confirm） ---------- */
-.mask{position:fixed;inset:0;background:rgba(4,7,12,.72);backdrop-filter:blur(3px);
+.mask{position:fixed;inset:0;background:rgba(4,7,12,.74);
   display:grid;place-items:center;z-index:9998;padding:20px;animation:fade .15s ease}
 @keyframes fade{from{opacity:0}to{opacity:1}}
-.dlg{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line2);border-radius:16px;
-  padding:20px 22px;box-shadow:var(--shadow)}
-.dlg h3{margin:0 0 6px;font-size:15px}
-.dlg p{margin:0 0 14px;color:var(--mut);font-size:12.5px;line-height:1.6;word-break:break-all}
-.dlg input{width:100%;margin-bottom:14px}
+.dlg{width:100%;max-width:420px;background:#141b2b;border:1px solid var(--line2);border-radius:16px;
+  padding:22px 24px;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.dlg h3{margin:0 0 12px;font-size:16px;color:var(--fg)}
+.dlg p{margin:0 0 14px;color:var(--mut);font-size:13px;line-height:1.6;word-break:break-all}
+.dlg input{width:100%;margin-bottom:18px;font-size:14px;padding:11px 13px;height:auto}
 .dlg .foot{display:flex;gap:10px;justify-content:flex-end}
+.dlg .btn.sm{padding:8px 16px;font-size:13px}
+input::placeholder,textarea::placeholder{color:#5c6a82}
 
 /* ---------- 登录 ---------- */
 .login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px;
-  background:radial-gradient(900px 500px at 50% -15%,#152murky 0%,transparent 60%),
+  background:radial-gradient(900px 500px at 50% -15%,#152238 0%,transparent 60%),
              radial-gradient(700px 400px at 110% 110%,#151f38 0%,transparent 55%),var(--bg)}
 .login-card{width:min(420px,100%);background:linear-gradient(180deg,#141b2b,#101622);
   border:1px solid var(--line);border-radius:20px;padding:34px 30px 26px;box-shadow:var(--shadow)}
@@ -204,7 +206,6 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
   .dl-row .acts{opacity:1}
   .top{padding:0 12px}
 }
-.mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55}
 </style>
 <script src="/sheet-eval.js"></script>
 </head>
@@ -288,7 +289,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 /* ---------- 页内对话框（不用原生 prompt/confirm，原生弹窗会把整个页面卡住） ---------- */
 function dlg({ title, desc = '', value = null, placeholder = '', ok = '确定', danger = false }) {
   return new Promise((resolve) => {
-    const input = value === null ? '' : `<input class="inp" id="dlgIn" value="${esc(value)}" placeholder="${esc(placeholder)}">`;
+    const input = value === null ? '' : `<input class="input" id="dlgIn" value="${esc(value)}" placeholder="${esc(placeholder)}">`;
     const box = el(`<div class="mask">
       <div class="dlg">
         <h3>${esc(title)}</h3>${desc ? `<p>${esc(desc)}</p>` : ''}${input}
