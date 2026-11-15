@@ -1,0 +1,1 @@
+﻿           ${c.write ? `<button class="btn sm ghost" onclick="renameFile('${it.id}','${esc(it.name)}')">重命名</button>` : ''}

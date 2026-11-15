@@ -1,0 +1,314 @@
+/* ================= 回收站 / 标签 / 收藏 / 最近 / 搜索 / 批量 / 剪贴板 / 相册 ================= */
+
+function togglePick(id, on) {
+  if (!state.pick) state.pick = new Set();
+  if (on) state.pick.add(id); else state.pick.delete(id);
+  renderPickBar();
+}
+
+function renderPickBar() {
+  let bar = document.getElementById('pickbar');
+  const n = state.pick ? state.pick.size : 0;
+  if (!n) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'pickbar'; bar.className = 'pickbar';
+    document.body.appendChild(bar);
+  }
+  const c = state.can;
+  bar.innerHTML = `<b>已选 ${n} 项</b>
+    ${c.write ? `<button class="btn sm danger" onclick="batchDelete()">删除</button>
+    <button class="btn sm" onclick="batchMove()">移动到当前目录</button>
+    <button class="btn sm" onclick="batchTag()">打标签</button>` : ''}
+    <button class="btn sm" onclick="batchZip()">打包下载</button>
+    <button class="btn sm ghost" onclick="clearPick()">取消</button>`;
+}
+
+function clearPick() {
+  state.pick = new Set();
+  document.querySelectorAll('#view .pick input').forEach((i) => (i.checked = false));
+  renderPickBar();
+}
+
+async function batchDelete() {
+  const ids = [...state.pick];
+  if (!ids.length) return;
+  if (!(await confirmDlg('批量删除', `把选中的 ${ids.length} 项移到回收站？`))) return;
+  const r = await api('/api/batch', { method: 'POST', body: JSON.stringify({ op: 'delete', ids }) });
+  toast(`已移动 ${r.n} 项到回收站`, 'ok'); clearPick(); go('files');
+}
+
+async function batchMove() {
+  const ids = [...state.pick];
+  if (!ids.length) return;
+  const r = await api('/api/batch', { method: 'POST', body: JSON.stringify({ op: 'move', ids, folderId: state.folder }) });
+  toast(`已移动 ${r.n} 项`, 'ok'); clearPick(); go('files');
+}
+
+async function batchTag() {
+  const ids = [...state.pick];
+  if (!ids.length) return;
+  const raw = await askText('打标签', '多个标签用逗号分开；不存在的会自动建。', '', '比如：旅行,2026');
+  if (!raw) return;
+  const names = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  const { tags } = await api('/api/tags');
+  const map = new Map(tags.map((t) => [t.name, t.id]));
+  for (const n of names) {
+    if (!map.has(n)) { const r = await api('/api/tags', { method: 'POST', body: JSON.stringify({ name: n }) }); map.set(n, r.tag.id); }
+  }
+  for (const id of ids) {
+    await api(`/api/files/${id}/tags`, { method: 'POST', body: JSON.stringify({ add: names.map((n) => map.get(n)) }) });
+  }
+  toast('已打标签', 'ok'); clearPick();
+}
+
+function batchZip() {
+  const ids = [...state.pick];
+  if (!ids.length) return;
+  window.open('/api/zip?ids=' + encodeURIComponent(ids.join(',')), '_blank');
+}
+
+async function toggleStar(id, btn) {
+  const on = btn.classList.contains('on');
+  try {
+    await api('/api/files/' + id + '/star', { method: on ? 'DELETE' : 'POST' });
+    btn.classList.toggle('on', !on);
+    if (state.starred) { if (on) state.starred.delete(id); else state.starred.add(id); }
+    toast(on ? '已取消收藏' : '已收藏', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function editFileTags(id) {
+  const cur = await api('/api/files/' + id + '/tags');
+  const raw = await askText('标签', '多个用逗号分开，留空则清空。', cur.tags.map((t) => t.name).join(','), '比如：工作,重要');
+  if (raw === null) return;
+  const names = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  const { tags } = await api('/api/tags');
+  const map = new Map(tags.map((t) => [t.name, t.id]));
+  for (const n of names) if (!map.has(n)) { const r = await api('/api/tags', { method: 'POST', body: JSON.stringify({ name: n }) }); map.set(n, r.tag.id); }
+  const wanted = new Set(names.map((n) => map.get(n)));
+  const remove = cur.tags.map((t) => t.id).filter((t) => !wanted.has(t));
+  await api('/api/files/' + id + '/tags', { method: 'POST', body: JSON.stringify({ add: [...wanted], remove }) });
+  toast('标签已更新', 'ok'); go('files');
+}
+
+/* ---------- 剪贴板（剪切/复制 → 粘贴） ---------- */
+function setClip(mode, it) {
+  state.clip = { mode, kind: it.kind, id: it.id, name: it.name };
+  toast(mode === 'cut' ? `已剪切：${it.name}` : `已复制：${it.name}`, 'ok');
+}
+
+async function pasteClip() {
+  const c = state.clip;
+  if (!c) return toast('剪贴板是空的', 'err');
+  try {
+    if (c.mode === 'cut') {
+      await api('/api/move', { method: 'POST', body: JSON.stringify({ kind: c.kind, id: c.id, folderId: state.folder }) });
+      toast('已移动', 'ok');
+    } else {
+      await api('/api/copy', { method: 'POST', body: JSON.stringify({ kind: c.kind, id: c.id, folderId: state.folder }) });
+      toast('已复制', 'ok');
+    }
+    if (c.mode === 'cut') state.clip = null;
+    go('files');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+if (!window.__clipKeys) {
+  window.__clipKeys = true;
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'v' && state.clip) { e.preventDefault(); pasteClip(); }
+  });
+}
+
+/* ---------- 回收站 ---------- */
+async function renderTrash() {
+  const { files, folders } = await api('/api/trash');
+  crumb([{ t: '回收站' }]);
+  const items = [
+    ...(folders || []).map((f) => ({ ...f, kind: 'folder' })),
+    ...(files || []).map((f) => ({ ...f, kind: 'file' })),
+  ];
+  let html = `<div class="page-h"><h2>回收站</h2><span class="sub">${items.length} 项</span><div class="spacer"></div>
+    ${items.length ? `<button class="btn sm danger" onclick="emptyTrash()">清空回收站</button>` : ''}</div>`;
+  if (!items.length) {
+    html += `<div class="card"><div class="empty"><div class="big">🗑️</div>回收站是空的</div></div>`;
+  } else {
+    html += '<div class="dl">';
+    for (const it of items) {
+      html += row(it.name, `${it.kind === 'folder' ? '目录' : bytes(it.size)} · 删除于 ${when(it.deleted_at)}`,
+        it.kind === 'folder' ? '📁' : fileIcon(it.name),
+        `<button class="btn sm" onclick="restoreTrash('${it.kind}','${it.id}')">还原</button>
+         <button class="btn sm danger" onclick="purgeTrash('${it.kind}','${it.id}')">彻底删除</button>`);
+    }
+    html += '</div>';
+  }
+  $('#view').innerHTML = html;
+}
+
+async function restoreTrash(kind, id) {
+  await api('/api/trash/restore', { method: 'POST', body: JSON.stringify({ kind, id }) });
+  toast('已还原', 'ok'); go('trash');
+}
+async function purgeTrash(kind, id) {
+  if (!(await confirmDlg('彻底删除', '删掉就找不回来了，确定？'))) return;
+  const r = await api('/api/trash/purge', { method: 'POST', body: JSON.stringify({ kind, id }) });
+  toast(`已删除${r.files ? '，清理 ' + r.files + ' 个文件' : ''}`, 'ok'); go('trash');
+}
+async function emptyTrash() {
+  if (!(await confirmDlg('清空回收站', '所有内容会被永久删除，确定？'))) return;
+  const r = await api('/api/trash/purge', { method: 'POST', body: JSON.stringify({ all: true }) });
+  toast(`已清空：${r.files || 0} 个文件、${r.folders || 0} 个目录`, 'ok'); go('trash');
+}
+
+/* ---------- 标签管理 ---------- */
+async function renderTags() {
+  const { tags } = await api('/api/tags');
+  crumb([{ t: '标签' }]);
+  let html = `<div class="page-h"><h2>标签</h2><span class="sub">${tags.length} 个</span><div class="spacer"></div>
+    <button class="btn sm primary" onclick="newTag()">＋ 新建标签</button></div>`;
+  if (!tags.length) {
+    html += `<div class="card"><div class="empty"><div class="big">🏷️</div>还没有标签</div></div>`;
+  } else {
+    html += '<div class="card"><div class="taglist">';
+    for (const t of tags) {
+      html += `<span class="chip">${esc(t.name)} <b>${t.n}</b>
+        <a onclick="go('search',{q:''})" title="按标签看" style="display:none"></a>
+        <a onclick="delTag(${t.id},'${esc(t.name)}')" title="删除">×</a></span>`;
+    }
+    html += '</div></div>';
+  }
+  $('#view').innerHTML = html;
+}
+
+async function newTag() {
+  const n = await askText('新建标签', '', '', '标签名');
+  if (!n) return;
+  await api('/api/tags', { method: 'POST', body: JSON.stringify({ name: n }) });
+  go('tags');
+}
+
+async function delTag(id, name) {
+  if (!(await confirmDlg('删除标签', `删除「${name}」？文件本身不会删。`))) return;
+  await api('/api/tags/' + id, { method: 'DELETE' }); go('tags');
+}
+
+/* ---------- 收藏 / 最近 ---------- */
+async function renderStars() {
+  const { files } = await api('/api/stars');
+  crumb([{ t: '收藏' }]);
+  let html = `<div class="page-h"><h2>收藏</h2><span class="sub">${files.length} 个文件</span></div>`;
+  html += files.length ? fileListHtml(files) : `<div class="card"><div class="empty"><div class="big">⭐</div>还没有收藏，在文件行点 ★</div></div>`;
+  $('#view').innerHTML = html;
+}
+
+async function renderRecent() {
+  const { files } = await api('/api/recent');
+  crumb([{ t: '最近' }]);
+  let html = `<div class="page-h"><h2>最近访问</h2><span class="sub">${files.length} 个文件</span></div>`;
+  html += files.length ? fileListHtml(files, true) : `<div class="card"><div class="empty"><div class="big">🕘</div>还没有记录</div></div>`;
+  $('#view').innerHTML = html;
+}
+
+function fileListHtml(files, withSeen) {
+  let html = '<div class="dl">';
+  for (const f of files) {
+    const isImage = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(f.name);
+    html += row(f.name, `${bytes(f.size)} · ${withSeen ? '看于 ' + when(f.seen_at) : '收藏于 ' + when(f.starred_at)}`, fileIcon(f.name),
+      `${isImage ? `<button class="btn sm" onclick="previewImage('${f.id}','${esc(f.name)}',${f.size})">预览</button>` : ''}
+       <button class="btn sm primary" onclick="downloadFile('${f.id}','${esc(f.name)}',${f.size})">下载</button>`);
+  }
+  html += '</div>';
+  return html;
+}
+
+/* ---------- 搜索 ---------- */
+async function renderSearch(term) {
+  crumb([{ t: '搜索' + (term ? '：' + term : '') }]);
+  const box = `<div class="page-h"><h2>搜索</h2><div class="spacer"></div>
+    <input class="input" id="sq" value="${esc(term)}" placeholder="文件名…" style="max-width:260px"
+      onkeydown="if(event.key==='Enter'){go('search',{q:this.value})}">
+    <button class="btn sm primary" onclick="go('search',{q:document.getElementById('sq').value})">搜索</button></div>`;
+  if (!term) { $('#view').innerHTML = box + `<div class="card"><div class="empty"><div class="big">🔍</div>输入关键词回车</div></div>`; return; }
+  const r = await api('/api/search?q=' + encodeURIComponent(term));
+  const n = r.files.length + r.folders.length + r.docs.length + r.sheets.length;
+  let html = box + `<div class="sub" style="margin:0 0 10px;color:#8b98ad">共 ${n} 条</div><div class="dl">`;
+  for (const f of r.folders) html += row(f.name, '目录', '📁', `<button class="btn sm" onclick="go('files',{folder:${f.id}})">打开</button>`);
+  for (const d of r.docs) html += row(d.name, '文档', '📝', `<button class="btn sm" onclick="openDoc('${d.id}')">打开</button>`);
+  for (const s of r.sheets) html += row(s.name, '表格', '📊', `<button class="btn sm" onclick="openSheet('${s.id}')">打开</button>`);
+  for (const f of r.files) html += row(f.name, `${bytes(f.size)} · ${when(f.created_at)}`, fileIcon(f.name),
+    `<button class="btn sm primary" onclick="downloadFile('${f.id}','${esc(f.name)}',${f.size})">下载</button>`);
+  html += '</div>';
+  if (!n) html += `<div class="card"><div class="empty"><div class="big">🔍</div>没有匹配「${esc(term)}」的</div></div>`;
+  $('#view').innerHTML = html;
+}
+
+/* ---------- 相册 / 缩略图 ---------- */
+function canvasThumb(blobOrFile, max = 360) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blobOrFile);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      cv.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob 失败'))), 'image/webp', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片解码失败')); };
+    img.src = url;
+  });
+}
+
+async function thumbPut(blob, fileId) {
+  const r = await fetch('/api/files/' + fileId + '/thumb', {
+    method: 'PUT', credentials: 'same-origin',
+    headers: { 'Content-Type': 'image/webp' }, body: blob,
+  });
+  if (!r.ok) throw new Error('缩略图上传失败 ' + r.status);
+}
+
+async function makeThumbFromBlob(blobOrFile, fileId) {
+  const thumb = await canvasThumb(blobOrFile);
+  await thumbPut(thumb, fileId);
+}
+
+async function genThumbForFile(id) {
+  const res = await fetch('/api/files/' + id + '/preview', { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('取原图失败 ' + res.status);
+  await makeThumbFromBlob(await res.blob(), id);
+}
+
+async function renderPhotos() {
+  const { photos } = await api('/api/photos');
+  crumb([{ t: '相册' }]);
+  let html = `<div class="page-h"><h2>相册</h2><span class="sub">${photos.length} 张图片</span><div class="spacer"></div>
+    <button class="btn sm" onclick="genMissingThumbs()">补生成缩略图</button></div>`;
+  if (!photos.length) {
+    html += `<div class="card"><div class="empty"><div class="big">🖼️</div>还没有图片</div></div>`;
+  } else {
+    html += '<div class="pgrid">';
+    for (const p of photos) {
+      html += `<div class="pcard" onclick="previewImage('${p.id}','${esc(p.name)}',${p.size})">
+        ${p.thumb ? `<img loading="lazy" src="/api/files/${p.id}/thumb" alt="">` : `<div class="pno">🖼️<br><span>点击生成缩略图</span></div>`}
+        <div class="pnm">${esc(p.name)}</div></div>`;
+    }
+    html += '</div>';
+  }
+  $('#view').innerHTML = html;
+}
+
+async function genMissingThumbs() {
+  const { photos } = await api('/api/photos');
+  const todo = photos.filter((p) => !p.thumb);
+  if (!todo.length) return toast('都生成好了', 'ok');
+  let ok = 0;
+  for (const p of todo) { try { await genThumbForFile(p.id); ok++; } catch (e) { /* 单张失败跳过 */ } }
+  toast(`生成了 ${ok} 张缩略图`, ok ? 'ok' : 'err');
+  go('photos');
+}

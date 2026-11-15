@@ -756,13 +756,71 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 ---
 
-## 十、扩展方向
+## 十、文件管理功能
 
-- **上传会话用 Durable Object**：并发分片抢同一账号时做原子配额，避免 D1 记账竞态。
-- **分片加密**：前端流式 AES-GCM 加密后再上传，元数据存每片 IV；网盘侧看不到明文。
-- **冷热分层**：小文件/热文件留前几个账号，大文件往尾部账号堆。
-- **复制/冗余**：关键文件跨账号存两份，`chunks` 加 `replica_of`。
-- **回收站**：删除改软删，定时任务清理 R2 对象与配额。
+除了「传上去 / 下下来」，这一层把日常用得着的都做了。全部只依赖现有的 D1 / KV / R2，没有额外服务。
+
+### 回收站
+
+删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
+
+### 缩略图与相册
+
+- 上传图片时前端用 canvas 缩到长边 480px、JPEG q0.72，`PUT /api/files/:id/thumb` 存进 KV（key `thumb:<id>`，上限 200KB，content-type 存在 KV metadata 里），`GET` 直接吐字节。
+- `/api/photos` 列出全部图片并标出哪些已有缩略图；相册页走瀑布流卡片，没缩略图的显示占位，点「补齐缩略图」会逐个从 `/api/files/:id/preview` 拉前 256MB 生成。
+- 缩略图是**明文派生数据**：加密目录里的图片不做缩略图（否则等于把内容漏出来）。
+
+### 全文搜索 / 标签 / 收藏 / 最近
+
+- `/api/search?q=` 同时搜文件名、目录名、文档名与正文（`LIKE %q%`），文件/目录/文档/表格各取 50 条。
+- 标签是全局的（`tags` 表），多对多挂 `file_tags`；可批量打。
+- 收藏按用户记（`stars`），最近访问按用户记（`recent`，只在 `download`/`play` 时写，避免列表页刷爆）。API 令牌访问不记「最近」。
+
+### 批量操作
+
+文件行前面的勾选框 → 底部浮动条：删除 / 移动到当前目录 / 打标签 / 打包下载。后端 `POST /api/batch {op:'delete'|'move'|'tag', ids}`；`/api/move`、`/api/copy` 各自带目录自嵌套检测。
+
+### 打包下载（`GET /api/zip?ids=`）
+
+服务端手写 store（不压缩）zip：local header + central directory + EOCD，逐片从 R2 拉出来直接写进流，不在内存里攒整包。**上限 64MB 总量 / 50 个文件**——这是 Worker 内存与子请求数决定的，再大请用客户端逐个下。
+
+### Web 端剪切 / 粘贴
+
+右键菜单「剪切 / 复制」把选中项存进 `sessionStorage`，进目标目录后 `Ctrl+V` 或右键「粘贴到这里」执行 move/copy。
+
+### 分享：有效期 / 次数 / 提取码 / 每日限额
+
+分享短码本身是凭证，配置全在 KV 里（`share:<短码>` → `ShareRecord`）：
+
+| 字段 | 作用 |
+|---|---|
+| `exp` | 到期时间，KV 的 `expirationTtl` 同步 |
+| `max` / `used` | 总下载次数上限与已用 |
+| `code` | 提取码；有值时首屏先给提取码页，`?code=` 对上才出下载页 |
+| `dayMax` / `dayUsed` | 每天最多下载几次（跨天自动清零，`dayKey` 记日期） |
+| `byteMax` / `dayBytes` | 每天最多下多少字节（按文件大小预扣） |
+
+超限分别返回 429「今天的下载次数用完了」/「今天的流量用完了」。撤销 = `DELETE /api/shares/:jti` 删 KV 键，链接立刻 404。老的长签名链接（`base64url.签名`）仍然兼容。
+
+### 上传队列 / 断点续传
+
+- 每个文件开始上传时把 `{uploadId, name, size, chunkSize, chunksCount, done:[]}` 记进 `localStorage`，每传完一片回写 `done`。
+- 中断（关页面、断网、失败）后回到上传页会看到「有 N 个没传完」，点「继续」选同一个文件（名字与大小要一致）→ 只用原来的 `uploadId` 重传缺的片，已传的片在服务端也会被 `putChunk` 幂等跳过。
+- 幂等靠的是 `chunks UNIQUE(file_id, idx)` + 先查后写；配合内容寻址去重，重传同内容的分片直接命中 `blobs`。
+
+### 客户端加密文件夹（零知识）
+
+目录可以设口令：`PUT /api/folders/:id/enc {salt}` 只把**盐**存服务器（`folders.enc_salt`），口令永远不出浏览器。
+
+- 上传：`PBKDF2-SHA256(口令, 盐, 150000 次)` → AES-GCM-256 密钥；每片单独加密，IV = `SHA-256(盐 + ':' + 分片序号)` 前 12 字节（确定性，服务端无法重排）。密文大小 = 明文 + 16 字节认证标签，所以 `init` 时报 `size + 16 * chunks`，`enc_meta` 存 `{salt, v:1, chunks}`。
+- 下载：文件行显示 🔒，按钮变「解密下载」——整份拉下来按片解密，再另存到本地。
+- 服务端拿到的是密文分片，去重与配额都按密文算；口令丢了文件就打不开，这是设计使然。**加密目录不做缩略图、不参与分享预览。**
+
+> 注意：这是「网盘看不到内容」级别的加密，不是抗审查：盐与文件大小、分片数仍然可见。
+
+### 还没做的（有意留白）
+
+`Durable Object` 做原子配额（当前靠 `reserveBytes` 的 `MAX(0, ...)` 兜底，并发抢同一账号可能少算）、跨账号冗余副本（`chunks.replica_of`）、冷热分层（小文件留前几个账号）。
 
 ---
 
@@ -830,6 +888,13 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | GET | `/api/files/:id/preview` | 试播前缀流：只返回前 256MB（大文件/编码受限时的兜底） |
 | GET | `/api/sheets` · `/api/sheets/:id` · `/:id/export` | 表格列表 / 内容 / 导出 TSV |
 | GET | `/api/docs` · `/api/docs/:id` | 文档列表 / 内容（`?raw=1` 纯文本，`?view=1` 渲染页） |
+| GET | `/api/search?q=` | 全文搜索（文件/目录/文档/表格） |
+| GET | `/api/photos` | 图片列表 + 是否有缩略图 |
+| GET | `/api/files/:id/thumb` | 读缩略图（KV） |
+| GET | `/api/trash` | 回收站 |
+| GET | `/api/tags` · `/api/files/:id/tags` | 标签列表 / 某文件的标签 |
+| GET | `/api/stars` · `/api/recent` | 收藏列表 / 最近访问 |
+| GET | `/api/zip?ids=` | 打包下载（store zip，≤64MB / 50 文件） |
 
 写（仅 admin）：
 
@@ -839,9 +904,18 @@ Emby 是 .NET 服务，要持久进程、要本地磁盘存元数据和转码缓
 | POST | `/api/upload/init` | 开上传会话 |
 | PUT | `/api/upload/:id/chunk/:idx` | 传一片 |
 | POST | `/api/upload/:id/complete` | 收尾成文件 |
-| DELETE | `/api/files/:id` | 删除（连带清 R2 分片） |
-| POST | `/api/files/:id/share` | 生成签名分享链接（`ttlSec` / `maxDownloads`） |
-| GET/DELETE | `/api/shares[/:jti]` | 分享列表 / 撤销 |
+| DELETE | `/api/files/:id` | 软删（进回收站；`?hard=1` 才真删并退配额） |
+| PATCH | `/api/files/:id` | 重命名 `{name}` |
+| POST | `/api/files/:id/share` | 生成分享短码（`ttlSec` / `maxDownloads` / `code` / `dailyMax` / `dailyBytes`） |
+| GET/PATCH/DELETE | `/api/shares[/:jti]` | 分享列表 / 改提取码与配额 / 撤销 |
+| POST | `/api/trash/restore` · `/api/trash/purge` | 还原 / 彻底删除（`{all:true}` 清空） |
+| POST | `/api/batch` | 批量操作 `{op, ids}`（op = delete / move / tag） |
+| POST | `/api/move` · `/api/copy` | 移动 / 复制（`{kind,id,folderId}`，带自嵌套检测） |
+| POST/DELETE | `/api/files/:id/star` | 收藏 / 取消 |
+| POST/DELETE | `/api/tags[/:id]` | 新建 / 删除标签 |
+| POST | `/api/files/:id/tags` | 给文件打标签 `{tagId}` |
+| PUT/GET | `/api/files/:id/thumb` | 上传 / 读取缩略图（≤200KB） |
+| PUT | `/api/folders/:id/enc` | 开/关目录加密（只存盐 `{salt}`，`{salt:null}` 关闭） |
 | GET/POST/PATCH/DELETE | `/api/accounts[/:id]` | 账号池 CRUD |
 | POST | `/api/accounts/:id/test` | 测桶连通（`s3HeadBucket`） |
 | GET/POST/PATCH/DELETE | `/api/users[/:id]` | 用户（不许降级/删除最后一个 admin） |

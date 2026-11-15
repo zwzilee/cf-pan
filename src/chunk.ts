@@ -15,15 +15,15 @@ export interface InitArgs {
 }
 
 /** 第一步：建上传会话，告诉前端要切几片 */
-export async function initUpload(env: Env, args: InitArgs) {
+export async function initUpload(env: Env, args: InitArgs & { enc?: number; encMeta?: string | null }) {
   const cs = Math.min(Math.max(args.chunkSize || DEFAULT_CHUNK, MIN_CHUNK), MAX_CHUNK);
   const count = Math.max(1, Math.ceil(args.size / cs));
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO uploads (id, name, folder_id, size, chunk_size, chunks_count, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
+    `INSERT INTO uploads (id, name, folder_id, size, chunk_size, chunks_count, status, created_at, enc, enc_meta)
+     VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
   )
-    .bind(id, args.name, args.folderId ?? null, args.size, cs, count, nowISO())
+    .bind(id, args.name, args.folderId ?? null, args.size, cs, count, nowISO(), args.enc ? 1 : 0, args.encMeta || null)
     .run();
   return { uploadId: id, chunkSize: cs, chunksCount: count };
 }
@@ -116,9 +116,9 @@ export async function completeUpload(env: Env, uploadId: string) {
   const fileId = crypto.randomUUID();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO files (id, name, folder_id, size, chunk_size, chunks_count, status, sha256, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
-    ).bind(fileId, up.name, up.folder_id, up.size, up.chunk_size, up.chunks_count, fileHash, nowISO()),
+      `INSERT INTO files (id, name, folder_id, size, chunk_size, chunks_count, status, sha256, created_at, enc, enc_meta)
+       VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`,
+    ).bind(fileId, up.name, up.folder_id, up.size, up.chunk_size, up.chunks_count, fileHash, nowISO(), up.enc || 0, up.enc_meta || null),
     env.DB.prepare('UPDATE chunks SET file_id = ? WHERE file_id = ?').bind(fileId, uploadId),
     env.DB.prepare('DELETE FROM uploads WHERE id = ?').bind(uploadId),
   ]);

@@ -1,0 +1,4 @@
+﻿           ${c.write ? `<label class="pick" onclick="event.stopPropagation()"><input type="checkbox" onchange="togglePick('${it.id}',this.checked)"></label>` : ''}
+           <button class="btn sm ghost star ${state.starred && state.starred.has(it.id) ? 'on' : ''}" onclick="toggleStar('${it.id}',this)" title="收藏">★</button>
+           ${c.write ? `<button class="btn sm ghost" onclick="editFileTags('${it.id}')" title="标签">🏷️</button>` : ''}
+           ${c.write ? `<button class="btn sm ghost" onclick="renameFile('${it.id}','${esc(it.name)}')">重命名</button>` : ''}

@@ -1,0 +1,1 @@
+﻿  await api(`/api/upload/${uploadId}/complete`, { method: 'POST', body: '{}' });

@@ -1,0 +1,172 @@
+/* ================= 加密文件夹 + 上传队列（断点续传） ================= */
+
+const QU = 'pan.uploadQueue';
+
+function qLoad() { try { return JSON.parse(localStorage.getItem(QU) || '[]'); } catch (e) { return []; } }
+function qSave(list) { try { localStorage.setItem(QU, JSON.stringify(list)); } catch (e) {} }
+function qPut(rec) { const l = qLoad().filter((x) => x.uploadId !== rec.uploadId); l.push(rec); qSave(l); }
+function qDel(uploadId) { qSave(qLoad().filter((x) => x.uploadId !== uploadId)); }
+
+const enc2b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b642u8 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function deriveEncKey(pass, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new TextEncoder().encode(salt), iterations: 150000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function chunkIv(salt, idx) {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + ':' + idx));
+  return new Uint8Array(h).slice(0, 12);
+}
+
+async function encChunk(key, buf, salt, idx) {
+  return crypto.subtle.encrypt({ name: 'AES-GCM', iv: await chunkIv(salt, idx) }, key, buf);
+}
+async function decChunk(key, buf, salt, idx) {
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: await chunkIv(salt, idx) }, key, buf);
+}
+
+/** 取当前目录的加密盐；有盐则要口令（同一次会话记住） */
+function folderSalt() {
+  if (state.folder === null) return null;
+  const f = (state.folders || []).find((x) => x.id === state.folder);
+  return f && f.enc_salt ? f.enc_salt : null;
+}
+
+async function encKeyFor(salt, folderId) {
+  const ck = 'enc:' + (folderId === null ? 'root' : folderId);
+  let pass = sessionStorage.getItem(ck);
+  if (!pass) {
+    pass = await askText('这个目录已加密', '输入目录口令（只在本页内存里用，不上传）', '', '口令');
+    if (!pass) throw new Error('没有口令，取消上传');
+    sessionStorage.setItem(ck, pass);
+  }
+  return deriveEncKey(pass, salt);
+}
+
+/* 上传一个文件：支持加密目录 + 断点续传（分片进度记在 localStorage） */
+async function uploadOne(file, onProgress, resume) {
+  let chunkSize = resume ? resume.chunkSize : chooseChunk(file.size);
+  const salt = folderSalt();
+  let key = null;
+  if (salt) key = await encKeyFor(salt, state.folder);
+
+  const chunks = Math.max(1, Math.ceil(file.size / chunkSize));
+  const declaredSize = salt ? file.size + 16 * chunks : file.size;
+
+  let uploadId, chunksCount, done = new Set(resume ? resume.done || [] : []);
+  if (resume) { uploadId = resume.uploadId; chunksCount = resume.chunksCount; }
+  else {
+    const r = await api('/api/upload/init', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: file.name, size: declaredSize, folderId: state.folder, chunkSize,
+        enc: salt ? 1 : 0, encMeta: salt ? JSON.stringify({ salt, v: 1, chunks }) : null,
+      }),
+    });
+    uploadId = r.uploadId; chunksCount = r.chunksCount;
+    qPut({ uploadId, name: file.name, size: file.size, folderId: state.folder, chunkSize, chunksCount, done: [] });
+  }
+
+  let saved = 0;
+  const idxs = [...Array(chunksCount).keys()].filter((i) => !done.has(i));
+  const worker = async () => {
+    while (idxs.length) {
+      const i = idxs.shift();
+      const raw = await file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize)).arrayBuffer();
+      const body = key ? await encChunk(key, raw, salt, i) : raw;
+      const r = await api(`/api/upload/${uploadId}/chunk/${i}`, {
+        method: 'PUT', body, headers: { 'Content-Type': 'application/octet-stream' },
+      });
+      if (r && r.dedup) saved += r.saved || 0;
+      done.add(i);
+      const rec = qLoad().find((x) => x.uploadId === uploadId);
+      if (rec) { rec.done = [...done]; qSave(qLoad().map((x) => (x.uploadId === uploadId ? rec : x))); }
+      onProgress(Math.round((done.size / chunksCount) * 100));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(1, chunksCount)) }, worker));
+  const comp = await api(`/api/upload/${uploadId}/complete`, { method: 'POST', body: '{}' });
+  qDel(uploadId);
+  if (saved > 0) toast(`命中去重，省了 ${bytes(saved)}`, 'ok');
+  if (comp && comp.fileId && /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(file.name) && !salt) {
+    try { await makeThumbFromBlob(file, comp.fileId); } catch (e) {}
+  }
+  return comp;
+}
+
+/** 加密文件解密下载：拉整份密文，按片解密后另存 */
+async function decryptDownload(id, name, size, chunkSize) {
+  try {
+    const meta = state.encMeta && state.encMeta[id];
+    const res = await fetch('/api/files/' + id + '/download?hard=0', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('下载失败 ' + res.status);
+    const cipher = await res.arrayBuffer();
+    const salt = meta && meta.salt;
+    if (!salt) throw new Error('缺少加密信息，无法解密');
+    const pass = sessionStorage.getItem('encp:' + id) || (await askText('解密文件', '输入这个目录的口令', '', '口令'));
+    if (!pass) throw new Error('没有口令');
+    sessionStorage.setItem('encp:' + id, pass);
+    const key = await deriveEncKey(pass, salt);
+    const csz = chunkSize + 16;
+    const out = [];
+    for (let i = 0; i * csz < cipher.byteLength; i++) {
+      const part = cipher.slice(i * csz, Math.min(cipher.byteLength, (i + 1) * csz));
+      out.push(new Uint8Array(await decChunk(key, part, salt, i)));
+    }
+    const blob = new Blob(out);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name.replace(/\.enc$/, '');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('已解密下载', 'ok');
+  } catch (e) { toast('解密失败：' + e.message, 'err'); }
+}
+
+/** 打开/关闭当前目录的加密（设置口令时只把盐存服务器） */
+async function toggleFolderEnc() {
+  if (state.folder === null) return toast('根目录不能加密，先建一个子目录', 'err');
+  const salt = folderSalt();
+  if (salt) {
+    if (!(await confirmDlg('关闭加密', '只关掉标记，已经加密的文件仍然需要口令才能解密。'))) return;
+    await api('/api/folders/' + state.folder + '/enc', { method: 'PUT', body: JSON.stringify({ salt: null }) });
+    toast('已关闭加密', 'ok'); return go('files');
+  }
+  const pass = await askText('开启加密', '给这个目录设个口令，以后往里传文件都会先在浏览器里加密', '', '口令（至少 6 位）');
+  if (!pass) return;
+  if (pass.length < 6) return toast('口令太短', 'err');
+  const salt = 's' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  await api('/api/folders/' + state.folder + '/enc', { method: 'PUT', body: JSON.stringify({ salt }) });
+  sessionStorage.setItem('enc:' + state.folder, pass);
+  toast('已开启加密', 'ok'); go('files');
+}
+
+/** 上传页：显示未完成队列 */
+function queueBannerHtml() {
+  const l = qLoad();
+  if (!l.length) return '';
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <b>有 ${l.length} 个没传完</b><div class="mut" style="margin:6px 0 10px">重新选同一个文件就能接着传（已传的分片不会重传）</div>
+    ${l.map((r) => `<div class="qrow"><span>${esc(r.name)} · ${bytes(r.size)}</span>
+      <button class="btn sm" onclick="resumePick('${r.uploadId}')">继续</button>
+      <button class="btn sm ghost" onclick="qDel('${r.uploadId}');go('upload')">丢弃</button></div>`).join('')}
+  </div>`;
+}
+
+function resumePick(uploadId) {
+  const rec = qLoad().find((x) => x.uploadId === uploadId);
+  if (!rec) return;
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    if (f.size !== rec.size || f.name !== rec.name) { toast('要选同一个文件（名字和大小要一致）', 'err'); return; }
+    await uploadOne(f, (p) => toast(`续传 ${p}%`, 'ok'), rec);
+    toast('续传完成', 'ok'); go('files');
+  };
+  inp.click();
+}

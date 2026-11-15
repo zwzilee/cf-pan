@@ -1,11 +1,11 @@
 import type { Env } from './types';
-import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting } from './util';
+import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO } from './util';
 import { hashPassword, signJWT, verifyJWT, verifyPassword } from './auth';
 import { encryptSecret } from './crypto';
 import * as store from './store';
 import * as s3 from './s3';
 import { completeUpload, getChunks, initUpload, maxEndForRequest, putChunk, streamDownload } from './chunk';
-import { checkShareUsable, createShareToken, revokeShare, verifyShareToken } from './share';
+import { checkShareUsable, createShareToken, getShareRecord, revokeShare, updateShare, verifyShareToken } from './share';
 import { checkLoginAllowed, clearLoginFailures, clientIp, MAX_ACCOUNT_FAILS, MAX_IP_FAILS, recordLoginFailure, WINDOW_SEC } from './ratelimit';
 import { listVisits, logVisit, lockStatus, pruneVisits, summarizeVisits } from './visit';
 import { clearAuthCookies, GUEST_TTL, publicSecret, readAccess, requireAdmin, requireAny, isManager } from './roles';
@@ -44,6 +44,11 @@ import {
 } from './doc';
 import { createMount, davEntry, deleteMount, getMount, listMounts, regenKey, updateMount } from './dav';
 import { deleteFileDeep } from './files';
+import {
+  batchHandler, copyHandler, fileTagsHandler, getThumbHandler, moveHandler, purgeHandler, putThumbHandler, recentHandler,
+  restoreHandler, searchHandler, softDeleteFolder, starHandler, starListHandler, tagCreateHandler, tagDeleteHandler,
+  tagsHandler, thumbListHandler, touchRecent, trashHandler, zipHandler,
+} from './extras';
 
 const SESSION_TTL = 60 * 60 * 12; // 后台会话 12h
 
@@ -142,6 +147,8 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/folders' && m === 'POST') return await createFolder(req, env);
   if (seg[0] === 'api' && seg[1] === 'folders' && seg[2] && m === 'PATCH')
     return await renameFolder(req, env, Number(seg[2]));
+  if (seg[0] === 'api' && seg[1] === 'folders' && seg[2] && seg[3] === 'enc' && m === 'PUT')
+    return await setFolderEnc(req, env, Number(seg[2]));
   if (seg[0] === 'api' && seg[1] === 'folders' && seg[2] && m === 'DELETE')
     return await deleteFolder(req, env, Number(seg[2]));
   if (p === '/api/upload/init' && m === 'POST') return await initHandler(req, env);
@@ -153,6 +160,28 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     return await createShareHandler(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && !seg[3] && m === 'PATCH') return await renameFile(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && m === 'DELETE') return await deleteFile(req, env, seg[2]);
+
+  // ================= 扩展：回收站 / 标签 / 收藏 / 最近 / 搜索 / 批量 / 缩略图 / 打包 =================
+  if (p === '/api/trash' && m === 'GET') return await trashHandler(req, env);
+  if (p === '/api/trash/restore' && m === 'POST') return await restoreHandler(req, env);
+  if (p === '/api/trash/purge' && m === 'POST') return await purgeHandler(req, env);
+  if (p === '/api/tags' && m === 'GET') return await tagsHandler(req, env);
+  if (p === '/api/tags' && m === 'POST') return await tagCreateHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'tags' && seg[2] && m === 'DELETE') return await tagDeleteHandler(req, env, Number(seg[2]));
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'tags') return await fileTagsHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'star') return await starHandler(req, env, seg[2]);
+  if (seg[0] === 'api' && seg[1] === 'files' && seg[2] && seg[3] === 'thumb') {
+    if (m === 'PUT') return await putThumbHandler(req, env, seg[2]);
+    if (m === 'GET') return await getThumbHandler(req, env, seg[2]);
+  }
+  if (p === '/api/stars' && m === 'GET') return await starListHandler(req, env);
+  if (p === '/api/recent' && m === 'GET') return await recentHandler(req, env);
+  if (p === '/api/photos' && m === 'GET') return await thumbListHandler(req, env);
+  if (p === '/api/search' && m === 'GET') return await searchHandler(req, env);
+  if (p === '/api/batch' && m === 'POST') return await batchHandler(req, env);
+  if (p === '/api/move' && m === 'POST') return await moveHandler(req, env);
+  if (p === '/api/copy' && m === 'POST') return await copyHandler(req, env);
+  if (p === '/api/zip' && m === 'GET') return await zipHandler(req, env);
 
   // ================= 管理员：在线表格 / 文档 =================
   if (p === '/api/sheets' && m === 'POST') return await createSheetHandler(req, env);
@@ -565,7 +594,7 @@ async function listFolders(req: Request, env: Env): Promise<Response> {
 /** 一次给整个目录树 + 每层文件数/大小，前台靠它渲染侧栏 */
 async function treeHandler(req: Request, env: Env): Promise<Response> {
   await requireAny(req, env);
-  const { results: folders } = await env.DB.prepare('SELECT id, parent_id, name FROM folders ORDER BY name').all<any>();
+  const { results: folders } = await env.DB.prepare('SELECT id, parent_id, name, enc_salt FROM folders ORDER BY name').all<any>();
   const { results: agg } = await env.DB.prepare(
     "SELECT folder_id, COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes FROM files WHERE status = 'ready' GROUP BY folder_id",
   ).all<any>();
@@ -576,6 +605,7 @@ async function treeHandler(req: Request, env: Env): Promise<Response> {
     id: f.id,
     parent_id: f.parent_id,
     name: f.name,
+    enc_salt: f.enc_salt ?? null,
     files: byFolder.get(f.id)?.n ?? 0,
     bytes: byFolder.get(f.id)?.bytes ?? 0,
   }));
@@ -607,6 +637,18 @@ async function renameFolder(req: Request, env: Env, id: number): Promise<Respons
 }
 
 /** 删目录：非空就拒绝，免得手滑连文件一起没了 */
+/** PUT /api/folders/:id/enc —— 开/关目录加密（只记录盐，密钥不下发） */
+async function setFolderEnc(req: Request, env: Env, id: number): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const salt = b.salt ? String(b.salt).slice(0, 120) : null;
+  const row = await env.DB.prepare('SELECT id FROM folders WHERE id = ?').bind(id).first<any>();
+  if (!row) throw new HttpError(404, '目录不存在');
+  await env.DB.prepare('UPDATE folders SET enc_salt = ? WHERE id = ?').bind(salt, id).run();
+  return json({ ok: true, enc: !!salt });
+}
+
 async function deleteFolder(req: Request, env: Env, id: number): Promise<Response> {
   const me = await requireAdmin(req, env);
   noteUser(me);
@@ -648,8 +690,8 @@ async function listFiles(req: Request, env: Env): Promise<Response> {
   const folderId = f === null || f === '' || f === 'root' ? null : Number(f);
   const sql =
     folderId === null
-      ? "SELECT id,name,size,chunks_count,folder_id,created_at FROM files WHERE status='ready' AND folder_id IS NULL ORDER BY created_at DESC"
-      : "SELECT id,name,size,chunks_count,folder_id,created_at FROM files WHERE status='ready' AND folder_id = ? ORDER BY created_at DESC";
+      ? "SELECT id,name,size,chunk_size,chunks_count,folder_id,created_at,enc,enc_meta FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id IS NULL ORDER BY created_at DESC"
+      : "SELECT id,name,size,chunk_size,chunks_count,folder_id,created_at,enc,enc_meta FROM files WHERE status='ready' AND deleted_at IS NULL AND folder_id = ? ORDER BY created_at DESC";
   const stmt = folderId === null ? env.DB.prepare(sql) : env.DB.prepare(sql).bind(folderId);
   const { results } = await stmt.all();
   return json({ files: results, folderId });
@@ -755,9 +797,15 @@ async function createShareHandler(req: Request, env: Env, fileId: string): Promi
   const b = (await req.json().catch(() => ({}))) as any;
   const ttlSec = Math.min(Math.max(Number(b.ttlSec) || 7 * 86400, 60), 365 * 86400);
   const maxDownloads = b.maxDownloads ? Number(b.maxDownloads) : undefined;
+  const code = b.code ? String(b.code).trim().slice(0, 16) : undefined;
 
-  const { token, jti, exp } = await createShareToken(env, fileId, ttlSec, maxDownloads);
-  return json({ ok: true, jti, exp, url: `/s/${token}`, token });
+  const { token, jti, exp } = await createShareToken(env, fileId, ttlSec, maxDownloads, {
+    code,
+    dailyMax: b.dailyMax ? Number(b.dailyMax) : 0,
+    dailyBytes: b.dailyBytes ? Number(b.dailyBytes) : 0,
+    note: b.note ? String(b.note) : undefined,
+  });
+  return json({ ok: true, jti, exp, url: `/s/${token}`, token, code: code || '' });
 }
 
 async function listSharesHandler(req: Request, env: Env): Promise<Response> {
@@ -768,7 +816,7 @@ async function listSharesHandler(req: Request, env: Env): Promise<Response> {
     listed.keys.map(async (k) => {
       const raw = await env.KV.get(k.name);
       if (!raw) return null;
-      const rec = JSON.parse(raw) as { fileId: string; max: number; used: number };
+      const rec = JSON.parse(raw) as any;
       const f = await env.DB.prepare('SELECT name, size FROM files WHERE id = ?').bind(rec.fileId).first<any>();
       return {
         jti: k.name.slice('share:'.length),
@@ -777,11 +825,32 @@ async function listSharesHandler(req: Request, env: Env): Promise<Response> {
         size: f?.size ?? 0,
         max: rec.max,
         used: rec.used,
+        code: rec.code || '',
+        dayMax: rec.dayMax || 0,
+        byteMax: rec.byteMax || 0,
+        dayUsed: rec.dayUsed || 0,
+        dayBytes: rec.dayBytes || 0,
+        note: rec.note || '',
         expiresAt: k.expiration ? new Date(k.expiration * 1000).toISOString() : null,
       };
     }),
   );
   return json({ shares: out.filter(Boolean) });
+}
+
+/** PATCH /api/shares/:jti —— 改提取码 / 每日配额 / 备注 / 总次数 */
+async function updateShareHandler(req: Request, env: Env, jti: string): Promise<Response> {
+  const me = await requireAdmin(req, env);
+  noteUser(me);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const rec = await updateShare(env, jti, {
+    code: b.code === undefined ? undefined : b.code === null || b.code === '' ? null : String(b.code),
+    dailyMax: b.dailyMax === undefined ? undefined : Number(b.dailyMax),
+    dailyBytes: b.dailyBytes === undefined ? undefined : Number(b.dailyBytes),
+    note: b.note === undefined ? undefined : String(b.note),
+    maxDownloads: b.maxDownloads === undefined ? undefined : Number(b.maxDownloads),
+  });
+  return json({ ok: true, code: rec.code || '', dayMax: rec.dayMax || 0, byteMax: rec.byteMax || 0, note: rec.note || '' });
 }
 
 async function revokeShareHandler(req: Request, env: Env, jti: string): Promise<Response> {
@@ -794,9 +863,11 @@ async function revokeShareHandler(req: Request, env: Env, jti: string): Promise<
 
 /** 公开信息：分享页首屏用，不占下载次数 */
 async function publicInfo(req: Request, env: Env): Promise<Response> {
-  const token = new URL(req.url).searchParams.get('token') || '';
+  const u = new URL(req.url);
+  const token = u.searchParams.get('token') || '';
+  const code = u.searchParams.get('code');
   const claims = await verifyShareToken(env, token);
-  const rec = await checkShareUsable(env, claims, false);
+  const rec = await checkShareUsable(env, claims, false, 0, code);
   const f = await env.DB.prepare("SELECT name, size, created_at FROM files WHERE id = ? AND status = 'ready'")
     .bind(claims.f)
     .first<any>();
@@ -815,23 +886,55 @@ async function publicShare(req: Request, env: Env, token: string, action?: strin
   const claims = await verifyShareToken(env, token);
   const url = new URL(req.url);
   const wantFile = action === 'download' || url.searchParams.has('dl');
+  const qcode = url.searchParams.get('code') || (req.headers.get('X-Share-Code') || '');
 
   if (!wantFile) {
-    const rec = await checkShareUsable(env, claims, false);
+    const rec0 = await getShareRecord(env, claims.j);
+    // 没填对提取码 → 只给提取码页
+    if (rec0 && rec0.code && String(qcode || '').toLowerCase() !== rec0.code.toLowerCase()) {
+      return new Response(codePage(token, !!qcode), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+    const rec = await checkShareUsable(env, claims, false, 0, qcode);
     const f = await env.DB.prepare("SELECT name, size FROM files WHERE id = ? AND status = 'ready'")
       .bind(claims.f)
       .first<any>();
     if (!f) throw new HttpError(404, '文件已被删除');
-    const html = sharePage(token, f.name, f.size, claims.e, rec.max > 0 ? rec.max - rec.used : -1);
+    const q = qcode ? `&code=${encodeURIComponent(qcode)}` : '';
+    const html = sharePage(token + (qcode ? `?code=${encodeURIComponent(qcode)}` : ''), f.name, f.size, claims.e, rec.max > 0 ? rec.max - rec.used : -1);
     return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
 
-  const rec = await checkShareUsable(env, claims, true);
-  if (rec.max > 0 && rec.used > rec.max) throw new HttpError(410, '分享链接下载次数已用完');
-
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(claims.f).first<any>();
   if (!file) throw new HttpError(404, '文件已被删除');
+  const rec = await checkShareUsable(env, claims, true, Number(file.size || 0), qcode);
+  if (rec.max > 0 && rec.used > rec.max) throw new HttpError(410, '分享链接下载次数已用完');
   return await serveFile(req, env, file);
+}
+
+function codePage(token: string, wrong: boolean): string {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>需要提取码 · PAN R2</title>
+<style>
+:root{--bg:#0b0e14;--card:#131823;--line:#232b3a;--fg:#e8eefc;--mut:#8b97ad;--accent:#4f8cff}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(1200px 600px at 50% -10%,#1a2440 0%,var(--bg) 60%);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.c{background:linear-gradient(180deg,#161d2b,#121722);border:1px solid var(--line);border-radius:18px;
+  padding:32px 28px 24px;max-width:380px;width:calc(100% - 36px);text-align:center;box-shadow:0 24px 60px -20px rgba(0,0,0,.8)}
+.ico{width:52px;height:52px;margin:0 auto 14px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#2b4a8f,#1b2b4d);font-size:24px}
+h1{font-size:15px;margin:0 0 6px}
+.m{color:var(--mut);font-size:12px;margin-bottom:18px}
+input{width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:#0f1624;color:var(--fg);font-size:15px;text-align:center;letter-spacing:2px}
+input:focus{outline:none;border-color:var(--accent)}
+button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:10px;background:linear-gradient(180deg,#5b96ff,#3f7bf0);color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+.err{color:#ff9a9a;font-size:12px;margin-top:10px}
+</style></head><body><div class="c"><div class="ico">🔒</div><h1>这个分享需要提取码</h1>
+<div class="m">输入后即可查看并下载</div>
+<input id="c" placeholder="提取码" autocomplete="off" maxlength="16">
+<button onclick="const v=document.getElementById('c').value.trim();location.href='?code='+encodeURIComponent(v)">确定</button>
+${wrong ? '<div class="err">提取码不对，再试一次</div>' : ''}
+</div></body></html>`;
 }
 
 function sharePage(token: string, name: string, size: number, exp: number, remaining: number): string {
@@ -867,7 +970,7 @@ a.btn:hover{filter:brightness(1.08)}
 </style></head>
 <body><div class="c"><div class="ico">🗂</div><h1>${esc(name)}</h1>
 <div class="m">${gb(size)} · ${remaining >= 0 ? `剩余 ${remaining} 次下载` : '不限次数'}</div>
-<a class="btn" href="/s/${token}?dl=1">下载文件</a>
+<a class="btn" href="/s/${token}${token.includes('?') ? '&' : '?'}dl=1">下载文件</a>
 <div class="f">有效期至 ${new Date(exp * 1000).toLocaleString('zh-CN')}<br>由 PAN R2 分享</div>
 </div></body></html>`;
 }
@@ -884,6 +987,8 @@ async function initHandler(req: Request, env: Env): Promise<Response> {
       size: Number(b.size),
       folderId: b.folderId ?? null,
       chunkSize: b.chunkSize,
+      enc: b.enc ? 1 : 0,
+      encMeta: b.encMeta ? String(b.encMeta).slice(0, 400) : null,
     }),
   );
 }
@@ -902,17 +1007,19 @@ async function completeHandler(req: Request, env: Env, uploadId: string): Promis
 
 // ============ 下载 / 播放 / 删除 ============
 async function download(req: Request, env: Env, id: string): Promise<Response> {
-  await requireAny(req, env);
+  const a = await requireAny(req, env);
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
+  if (a && a.kind !== 'token') await touchRecent(env, Number((a as any).uid || 0), id);
   return await serveFile(req, env, file);
 }
 
 /** /api/files/:id/play —— 内联播放：正确 Content-Type + inline，支持 Range 拖动 */
 async function play(req: Request, env: Env, id: string): Promise<Response> {
-  await requireAny(req, env);
+  const a = await requireAny(req, env);
   const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND status = 'ready'").bind(id).first<any>();
   if (!file) throw new HttpError(404, '文件不存在');
+  if (a && a.kind !== 'token') await touchRecent(env, Number((a as any).uid || 0), id);
   return await serveFile(req, env, file, { inline: true });
 }
 
@@ -1005,6 +1112,11 @@ async function serveFile(req: Request, env: Env, file: any, opts?: { inline?: bo
 async function deleteFile(req: Request, env: Env, id: string): Promise<Response> {
   const me = await requireAdmin(req, env);
   noteUser(me);
+  const hard = new URL(req.url).searchParams.get('hard') === '1';
+  if (!hard) {
+    await env.DB.prepare('UPDATE files SET deleted_at = ? WHERE id = ?').bind(nowISO(), id).run();
+    return json({ ok: true, trashed: 1 });
+  }
   const r = await deleteFileDeep(env, id);
   return json({ ok: true, ...r });
 }

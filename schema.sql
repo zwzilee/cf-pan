@@ -183,3 +183,36 @@ CREATE TABLE IF NOT EXISTS tg_channels (
   last_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tg_channels_folder ON tg_channels(folder_id);
+-- ===== 扩展：回收站 / 标签 / 收藏 / 最近 / 加密 =====
+ALTER TABLE files ADD COLUMN deleted_at TEXT NULL;
+ALTER TABLE folders ADD COLUMN deleted_at TEXT NULL;
+ALTER TABLE files ADD COLUMN enc INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE files ADD COLUMN enc_meta TEXT NULL;
+ALTER TABLE folders ADD COLUMN enc_salt TEXT NULL;
+
+CREATE TABLE IF NOT EXISTS tags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS file_tags (
+  file_id TEXT NOT NULL,
+  tag_id INTEGER NOT NULL,
+  PRIMARY KEY (file_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_file_tags_tag ON file_tags(tag_id);
+CREATE TABLE IF NOT EXISTS stars (
+  user_id INTEGER NOT NULL,
+  file_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, file_id)
+);
+CREATE TABLE IF NOT EXISTS recent (
+  user_id INTEGER NOT NULL,
+  file_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (user_id, file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recent_at ON recent(at DESC);
+ALTER TABLE uploads ADD COLUMN enc INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE uploads ADD COLUMN enc_meta TEXT NULL;

@@ -1,0 +1,5 @@
+﻿    { k: 'docs', t: '文档', ic: '📝', grp: '浏览' },
+    { k: 'photos', t: '相册', ic: '🖼️', grp: '浏览' },
+    { k: 'stars', t: '收藏', ic: '⭐', grp: '浏览' },
+    { k: 'recent', t: '最近', ic: '🕘', grp: '浏览' },
+  ];
