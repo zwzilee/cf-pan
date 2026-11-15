@@ -1,4 +1,5 @@
 import type { Env } from './types';
+import { expireTrash } from './extras';
 import { unzipHandler } from './extras';
 import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO } from './util';
 import { hashPassword, signJWT, verifyJWT, verifyPassword } from './auth';
@@ -75,8 +76,25 @@ export default {
       }
     }
 
-    // 访问日志：IP 在鉴权前就读得到；写库异步做，不拖慢响应
     const p = new URL(req.url).pathname;
+
+    // 回收站过期清理：cron 最短 1 天一次，撑不住「24 小时过期」，所以搭着请求顺手跑。
+    // 用 settings 里一个时间戳节流，最多 10 分钟一次，异步做不影响响应。
+    if (p.startsWith('/api/') && ctx?.waitUntil) {
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const last = await getSetting(env, 'last_trash_sweep');
+            if (!last || Date.now() - Date.parse(last) > 10 * 60 * 1000) {
+              await setSetting(env, 'last_trash_sweep', new Date().toISOString());
+              await expireTrash(env);
+            }
+          } catch { /* 清理失败不打扰用户 */ }
+        })(),
+      );
+    }
+
+    // 访问日志：IP 在鉴权前就读得到；写库异步做，不拖慢响应
     if (env.LOG_VISITS !== '0' && p.startsWith('/api/') && !p.startsWith('/api/visits')) {
       const task = logVisit(env, req, res, currentUser);
       if (ctx?.waitUntil) ctx.waitUntil(task);
@@ -91,6 +109,9 @@ export default {
     const removed = await pruneVisits(env, days);
     await setSetting(env, 'last_prune', new Date().toISOString());
     console.log(`visits pruned: ${removed} rows older than ${days} days`);
+    const tr = await expireTrash(env);
+    await setSetting(env, 'last_trash_sweep', new Date().toISOString());
+    console.log(`trash expired: ${tr.files} files / ${tr.folders} folders (keep ${tr.hours}h)`);
     ctx.waitUntil(Promise.resolve());
   },
 };

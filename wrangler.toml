@@ -20,6 +20,8 @@ BOOTSTRAP_ADMIN = ""
 LOG_VISITS = "1"
 # 日志保留天数（定时任务每 15 天清一次，超过这么久就删）
 VISIT_KEEP_DAYS = "15"
+# 回收站保留小时数（默认 24）：过期后自动真删
+TRASH_KEEP_HOURS = "24"
 # JWT 签名密钥请用 secret 设置，不要写在这里：
 #   npx wrangler secret put JWT_SECRET
 #   npx wrangler secret put MASTER_KEY     # 可选：加密账号密钥，强烈建议
@@ -36,7 +38,7 @@ id = "7f86393a862e4994ae8bee814659b96c"
 
 # 定时清理访问日志：每 15 天一次（每月 1 日和 16 日 04:00 UTC）
 [triggers]
-crons = ["0 4 1,16 * *"]
+crons = ["7 * * * *"]
 
 [observability]
 enabled = true

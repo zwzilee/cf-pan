@@ -3,7 +3,7 @@
  * 依赖：roles（鉴权）、util（json/HttpError/nowISO）、files（deleteFileDeep）、chunk（streamDownload）
  */
 import { requireAdmin, requireAny } from './roles';
-import { HttpError, json, nowISO } from './util';
+import { HttpError, json, nowISO, getSetting } from './util';
 import { deleteFileDeep } from './files';
 import { streamDownload, initUpload, putChunk, completeUpload } from './chunk';
 
@@ -46,7 +46,16 @@ export async function trashHandler(req: Request, env: any): Promise<Response> {
   const { results: ds } = await env.DB.prepare(
     "SELECT id,name,'folder' AS kind,created_at,deleted_at FROM folders WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 500",
   ).all();
-  return json({ files: fs, folders: ds });
+  const keep = await trashKeepHours(env);
+  const cutoff = isoBefore(keep).slice(0, 19);
+  const mark = (rows: any[]) =>
+    rows.map((r) => ({
+      ...r,
+      // 早于 cutoff 的已经该被清掉了（清理是异步的，可能还没轮到）
+      expired: String(r.deleted_at || '').slice(0, 19) < cutoff,
+      expiresAt: r.deleted_at ? new Date(Date.parse(r.deleted_at) + keep * 3600 * 1000).toISOString() : null,
+    }));
+  return json({ files: mark(fs as any[]), folders: mark(ds as any[]), keepHours: keep });
 }
 
 export async function restoreHandler(req: Request, env: any): Promise<Response> {
@@ -55,6 +64,16 @@ export async function restoreHandler(req: Request, env: any): Promise<Response> 
   const kind = String(b.kind || '');
   const id = String(b.id || '');
   if (!id) throw new HttpError(400, '缺 id');
+  const keep = await trashKeepHours(env);
+  const cutoff = isoBefore(keep);
+  const expiredRow = await env.DB.prepare(
+    'SELECT deleted_at FROM ' + (kind === 'folder' ? 'folders' : 'files') + ' WHERE id = ?',
+  ).bind(kind === 'folder' ? Number(id) : id).first();
+  if (!expiredRow) throw new HttpError(404, '回收站里没有这一项（可能已经过期被清掉了）');
+  if (expiredRow.deleted_at && String(expiredRow.deleted_at) < cutoff) {
+    throw new HttpError(410, `回收站只留 ${keep} 小时，这个已经过期了（数据随时会被清掉）`);
+  }
+
   if (kind === 'folder') {
     // 只还原「跟这次删除同一批」的东西：早先被单独删掉的，不该被顺带复活
     const rootRow = await env.DB.prepare('SELECT deleted_at FROM folders WHERE id = ?').bind(Number(id)).first();
@@ -72,6 +91,45 @@ export async function restoreHandler(req: Request, env: any): Promise<Response> 
   }
   await env.DB.prepare('UPDATE files SET deleted_at = NULL WHERE id = ?').bind(id).run();
   return json({ ok: true });
+}
+
+/** 回收站保留时长（小时）：默认 24，可用环境变量 TRASH_KEEP_HOURS 或后台设置覆盖 */
+export async function trashKeepHours(env: any): Promise<number> {
+  let v = Number(env.TRASH_KEEP_HOURS || 0);
+  if (!v) v = Number(await getSetting(env, 'trash_keep_hours')) || 0;
+  return v > 0 && v <= 24 * 365 ? v : 24;
+}
+
+function isoBefore(hours: number): string {
+  return new Date(Date.now() - hours * 3600 * 1000).toISOString();
+}
+
+/**
+ * 清理过期回收站：比 expired 还早进回收站的，真删掉。
+ * 既有定时任务（cron）调，也有请求进来时的顺手清理（cron 最短 1 天一次，等不起）。
+ * 目录只在这一步删，且只删「已经过期」的那些，避免和还原抢跑。
+ */
+export async function expireTrash(env: any, hours?: number): Promise<{ files: number; folders: number; hours: number }> {
+  const keep = hours && hours > 0 ? hours : await trashKeepHours(env);
+  const cutoff = isoBefore(keep);
+  const { results: fs } = await env.DB.prepare(
+    'SELECT id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ? LIMIT 500',
+  ).bind(cutoff).all();
+  let files = 0;
+  for (const f of fs as any[]) {
+    try { await deleteFileDeep(env, String(f.id)); files++; } catch { /* 单个失败留到下次 */ }
+  }
+  const { results: ds } = await env.DB.prepare(
+    'SELECT id FROM folders WHERE deleted_at IS NOT NULL AND deleted_at < ? ORDER BY id DESC LIMIT 500',
+  ).bind(cutoff).all();
+  let folders = 0;
+  for (const d of ds as any[]) {
+    const live = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE parent_id = ?').bind(d.id).first();
+    if (Number((live as any)?.n || 0) > 0) continue; // 还有子目录没到期，下一轮再说
+    await env.DB.prepare('DELETE FROM folders WHERE id = ?').bind(d.id).run();
+    folders++;
+  }
+  return { files, folders, hours: keep };
 }
 
 export async function purgeHandler(req: Request, env: any): Promise<Response> {

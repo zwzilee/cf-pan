@@ -1392,22 +1392,27 @@ if (!window.__clipKeys) {
 
 /* ---------- 回收站 ---------- */
 async function renderTrash() {
-  const { files, folders } = await api('/api/trash');
+  const { files, folders, keepHours } = await api('/api/trash');
+  const keep = Number(keepHours || 24);
   crumb([{ t: '回收站' }]);
   const items = [
     ...(folders || []).map((f) => ({ ...f, kind: 'folder' })),
     ...(files || []).map((f) => ({ ...f, kind: 'file' })),
   ];
-  let html = `<div class="page-h"><h2>回收站</h2><span class="sub">${items.length} 项</span><div class="spacer"></div>
+  let html = `<div class="page-h"><h2>回收站</h2><span class="sub">${items.length} 项 · ${keep} 小时后自动清掉</span><div class="spacer"></div>
     ${items.length ? `<button class="btn sm danger" onclick="emptyTrash()">清空回收站</button>` : ''}</div>`;
   if (!items.length) {
     html += `<div class="card"><div class="empty"><div class="big">🗑️</div>回收站是空的</div></div>`;
   } else {
     html += '<div class="dl">';
     for (const it of items) {
-      html += row(it.name, `${it.kind === 'folder' ? '目录' : bytes(it.size)} · 删除于 ${when(it.deleted_at)}`,
+      const gone = it.expired;
+      const left = it.expiresAt ? Math.max(0, Date.parse(it.expiresAt) - Date.now()) : 0;
+      const lh = Math.floor(left / 3600000), lm = Math.floor((left % 3600000) / 60000);
+      const tip = gone ? '<span class="pill err">已过期</span>' : `<span class="pill warn">还剩 ${lh > 0 ? lh + ' 小时' : lm + ' 分钟'}</span>`;
+      html += row(it.name, `${it.kind === 'folder' ? '目录' : bytes(it.size)} · 删除于 ${when(it.deleted_at)} ${tip}`,
         it.kind === 'folder' ? '📁' : fileIcon(it.name),
-        `<button class="btn sm" onclick="restoreTrash('${it.kind}','${it.id}')">还原</button>
+        `${gone ? '' : `<button class="btn sm" onclick="restoreTrash('${it.kind}','${it.id}')">还原</button>`}
          <button class="btn sm danger" onclick="purgeTrash('${it.kind}','${it.id}')">彻底删除</button>`);
     }
     html += '</div>';

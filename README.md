@@ -762,7 +762,9 @@ node -e "const fs=require('fs');const h=fs.readFileSync('web/index.html','utf8')
 
 ### 回收站
 
-删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。**目录删除也走软删**（整棵子树一起进回收站，能还原）。注意：进了回收站的文件，**下载 / 播放 / 预览 / 分享 / 改名 全部返回 404**（等于已消失，只是数据还留着，随时能还原）。
+删除先是软删（`files.deleted_at` / `folders.deleted_at` 打时间戳），文件与分片都还在，配额也没退。**目录删除也走软删**（整棵子树一起进回收站，能还原）。**回收站只留 24 小时**：到期自动真删（R2 分片按引用计数回收、KV 缩略图一起清）。清理有两条触发路径 —— ① cron 每小时扫一次（`wrangler.toml` 的 `crons = ["7 * * * *"]`）；② 任何 `/api/*` 请求顺手跑一次，10 分钟节流（cron 最短 1 天一次，撑不住 24 小时）。想改时长：改 `wrangler.toml` 的 `TRASH_KEEP_HOURS`，或在 D1 `settings` 里写 `trash_keep_hours`。过期的东西列表里标「已过期」、还原按钮消失（硬调接口也会 410）。
+
+注意：进了回收站的文件，**下载 / 播放 / 预览 / 分享 / 改名 全部返回 404**（等于已消失，只是数据还留着，随时能还原）。
 
 回收站页可以单条还原或彻底删除；`POST /api/trash/purge {all:true}` 一次清空。还原是**按批次**的：`deleted_at` 时间戳相同才一起复活——先单独删掉的文件，不会因为后来还原整个目录而被顺带捞回来。统计、目录树、WebDAV 列表都只看 `deleted_at IS NULL` 的部分。**配额只在真删时退还**（`deleteFileDeep` 走 `blobs.refs` 引用计数，最后一份引用消失才 `s3Delete` 并 `reserveBytes(-size)`）。
 
