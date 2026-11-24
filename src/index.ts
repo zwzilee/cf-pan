@@ -355,6 +355,9 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     return await tgChannelUpdateHandler(req, env, seg[3]);
   if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'channels' && seg[3] && m === 'DELETE')
     return await tgChannelDeleteHandler(req, env, seg[3]);
+  // 服务器缓存清理队列：cron 脚本拉取待删列表（拉取即返回，删完 POST /ack 回执）
+  if (p === '/api/tg/sweep' && m === 'GET') return await tgSweepListHandler(req, env);
+  if (p === '/api/tg/sweep/ack' && m === 'POST') return await tgSweepAckHandler(req, env);
 
   // ================= 管理员：WebDAV 挂载 =================
   if (p === '/api/dav' && m === 'GET') return await davListHandler(req, env);
@@ -372,6 +375,17 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/locks' && m === 'GET') return await locksHandler(req, env);
 
   // ================= 静态前端 =================
+  // 全景背景图：从 KV 取（键 bg:panorama），管理员可上传替换；未设置时 404
+  if (p.startsWith('/__bg/') && m === 'GET') {
+    try {
+      const bg = await env.KV.get('bg:panorama', 'arrayBuffer');
+      if (!bg) return new Response('no background', { status: 404 });
+      const ct = (await env.KV.get('bg:panorama:ct')) || 'image/jpeg';
+      return new Response(bg, { headers: { 'Content-Type': String(ct), 'Cache-Control': 'public, max-age=300' } });
+    } catch (e: any) {
+      return new Response('bg error', { status: 500 });
+    }
+  }
   if (env.ASSETS && !p.startsWith('/api/')) return env.ASSETS.fetch(req);
   return json({ error: 'Not Found' }, { status: 404 });
 }
@@ -1573,6 +1587,23 @@ async function tgChannelsHandler(req: Request, env: Env): Promise<Response> {
 async function tgProgressHandler(req: Request, env: Env): Promise<Response> {
   await requireAdmin(req, env);
   return json({ ok: true, stats: await jobStats(env), jobs: await listJobs(env, 80) });
+}
+
+// 服务器 cron 拉取「待清理缓存」列表（只含服务器绝对路径，已入库文件）。
+async function tgSweepListHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  const rows = await env.DB.prepare('SELECT id, path, name, created_at FROM tg_cache_sweep ORDER BY created_at ASC LIMIT 500').all<any>().catch(() => ({ results: [] }));
+  return json({ ok: true, items: rows.results || [] });
+}
+
+// cron 删完回报，把队列项清掉（带 id 列表）。
+async function tgSweepAckHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  const b = (await req.json().catch(() => ({}))) as any;
+  const ids: string[] = Array.isArray(b.ids) ? b.ids.map(String) : [];
+  let n = 0;
+  for (const id of ids) { await env.DB.prepare('DELETE FROM tg_cache_sweep WHERE id = ?').bind(id).run().catch(() => {}); n++; }
+  return json({ ok: true, deleted: n });
 }
 
 async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response> {

@@ -567,6 +567,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
         chanId: chan.id,
         folderId: chan.folder_id,
         hasFileContentLen: contentLen > 0,
+        filePath: filePath || '',
       };
       // ★ 续传：找出已落库的片，只为缺失的片生成批次（已传的跳过，不重复入队）
       const haveRows = await env.DB.prepare('SELECT idx FROM chunks WHERE file_id = ?').bind(up.uploadId).all<any>().catch(() => null);
@@ -666,6 +667,19 @@ export interface TgChunkBatchMsg {
   from: number;
   to: number;
   isLast: boolean;
+  filePath?: string;
+}
+/**
+ * 清理标记表：某文件入库成功后，把服务器本地缓存路径记下来，
+ * 由服务器上的定时脚本（cron）来删这些文件。**只删缓存，不删 TG 消息，也不动网盘分片数据。**
+ */
+export async function markCacheForSweep(env: Env, filePath: string | undefined | null, name: string): Promise<void> {
+  if (!filePath || !filePath.trim()) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO tg_cache_sweep (id, path, name, created_at) VALUES (?,?,?,?)`,
+    ).bind('cs_' + Math.random().toString(36).slice(2) + Date.now().toString(36), filePath.trim(), name || '', new Date().toISOString()).run();
+  } catch { /* 表不存在就静默（首次需建表，见 schema.sql） */ }
 }
 
 /**
@@ -759,6 +773,28 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
     chat_id: m.chatId,
     text: `✅ 已存入网盘：${m.name}（${fmtBytes(m.size)}）\n目录：${dir}`,
   }, cfg.apiBase).catch(() => {});
+  // 传完清服务器本地缓存（保留分片去重数据，不删 TG 消息）
+  await cleanupTgCache(env, (m as any).filePath).catch(() => {});
+  await markCacheForSweep(env, (m as any).filePath, m.name).catch(() => {});
+}
+
+/**
+ * 传完后清理服务器上的 TG 本地缓存（Bot API 下载到磁盘的原文件），
+ * 但**保留网盘里的分片数据**（chunks 表 + R2 对象），所以同一个视频再传会被去重、不会重复存。
+ * 绝不删除 TG 里的历史消息。清理是「尽力而为」：失败不影响入库结果。
+ */
+export async function cleanupTgCache(env: Env, filePath: string | undefined | null): Promise<void> {
+  if (!filePath || !filePath.trim()) return;
+  const base = (await getTgConfig(env)).fileBase || '';
+  if (!base) return; // 没配本地静态基址，说明走的是云 API，无服务器本地缓存可清
+  // fileBase 形如 https://dsh.dante.us.ci/tgfile → 清理端点同源 /tgclean
+  let root = '';
+  try { root = new URL(base).origin; } catch { return; }
+  const secret = (await getTgConfig(env)).fileSecret || '';
+  const url = `${root}/tgclean?p=${encodeURIComponent(filePath)}`;
+  try {
+    await fetch(url, { method: 'POST', headers: { 'X-Tgfile-Secret': secret } });
+  } catch { /* ignore */ }
 }
 
 /**

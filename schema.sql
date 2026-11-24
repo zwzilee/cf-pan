@@ -164,6 +164,15 @@ CREATE TABLE IF NOT EXISTS tg_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_tg_jobs_created ON tg_jobs(created_at DESC);
 
+-- TG 本地缓存待清理队列：入库成功后记录服务器缓存路径，由服务器 cron 定时删除。
+-- 只清缓存文件，不删 TG 消息，也不动网盘分片（chunks/R2）。
+CREATE TABLE IF NOT EXISTS tg_cache_sweep (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  name TEXT,
+  created_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
