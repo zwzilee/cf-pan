@@ -801,55 +801,55 @@ CI 里就三行：
 
 这里是**所有**能影响运行行为的变量，分三类：**部署期绑定**（改不了运行时）、**必填密钥**、**可选开关**。每一行都写清楚「不填会怎样」。
 
-### 1. 部署期绑定（写在 \`wrangler.toml\`，不能用环境变量在运行时改）
+### 1. 部署期绑定（写在 `wrangler.toml`，不能用环境变量在运行时改）
 
 | 名字 | 类型 | 必填? | 作用 | 不填/写错会怎样 |
 |---|---|---|---|---|
-| \`DB\` | D1 binding | **必填** | 元数据库（用户、账号池、文件夹、文件、分片、回收站、标签…） | 部署时绑定校验失败，或运行时报 \`D1_ERROR\` |
-| \`KV\` | KV binding | **必填** | 分享短码、缩略图、settings、限流计数、加密盐 | 分享/缩略图全报错 |
-| \`ASSETS\` | Static Assets binding | 可选 | 托管 \`web/\` 前端；不绑定则只能用 API | 根路径 404，但 API 仍可用 |
-| \`database_id\` | uuid | **必填** | \`wrangler d1 create pan_r2\` 返回的 id | 部署报找不到库 |
-| \`id\`（KV） | 32位hex | **必填** | \`wrangler kv namespace create KV\` 返回的 id | 同上 |
+| `DB` | D1 binding | **必填** | 元数据库（用户、账号池、文件夹、文件、分片、回收站、标签…） | 部署时绑定校验失败，或运行时报 `D1_ERROR` |
+| `KV` | KV binding | **必填** | 分享短码、缩略图、settings、限流计数、加密盐 | 分享/缩略图全报错 |
+| `ASSETS` | Static Assets binding | 可选 | 托管 `web/` 前端；不绑定则只能用 API | 根路径 404，但 API 仍可用 |
+| `database_id` | uuid | **必填** | `wrangler d1 create pan_r2` 返回的 id | 部署报找不到库 |
+| `id`（KV） | 32位hex | **必填** | `wrangler kv namespace create KV` 返回的 id | 同上 |
 
 > 部署期绑定**只能**在部署前用脚本从环境变量注进 toml —— 见上一节「能不能用 CF 环境变量改掉 REPLACE_WITH_…？」。
-> \`npm run deploy:env\` 读 \`D1_DATABASE_ID\` / \`KV_NAMESPACE_ID\` 两个**构建期**环境变量，渲染出 \`.wrangler-deploy.toml\` 再部署。
+> `npm run deploy:env` 读 `D1_DATABASE_ID` / `KV_NAMESPACE_ID` 两个**构建期**环境变量，渲染出 `.wrangler-deploy.toml` 再部署。
 
-### 2. 必填密钥（用 \`wrangler secret put\` 设，不进仓库）
+### 2. 必填密钥（用 `wrangler secret put` 设，不进仓库）
 
 | 名字 | 必填? | 作用 | 不填会怎样 |
 |---|---|---|---|
-| \`JWT_SECRET\` | **必填** | 后台登录态（cookie \`sid\`）的 HS256 签名密钥；\`PUBLIC_SECRET\` 未设时也兼作前台访客签名 | 登录 JWT 无法签名/校验，后台进不去 |
-| \`MASTER_KEY\` | 强烈建议 | 用 AES-GCM 加密账号池里的 \`secret_access_key\` 落库；不设则明文 base64（\`plain:base64\`）存 D1 | 能跑，但 D1 里账号密钥是明文，泄露即全桶沦陷 |
-| \`PUBLIC_SECRET\` | 可选 | 单独给前台访客凭证签名；不设时自动退回用 \`JWT_SECRET\` | 能跑；前后台共用同一个密钥 |
+| `JWT_SECRET` | **必填** | 后台登录态（cookie `sid`）的 HS256 签名密钥；`PUBLIC_SECRET` 未设时也兼作前台访客签名 | 登录 JWT 无法签名/校验，后台进不去 |
+| `MASTER_KEY` | 强烈建议 | 用 AES-GCM 加密账号池里的 `secret_access_key` 落库；不设则明文 base64（`plain:base64`）存 D1 | 能跑，但 D1 里账号密钥是明文，泄露即全桶沦陷 |
+| `PUBLIC_SECRET` | 可选 | 单独给前台访客凭证签名；不设时自动退回用 `JWT_SECRET` | 能跑；前后台共用同一个密钥 |
 
-> 三个都是 secret，**不要**写进 \`wrangler.toml\` 的 \`[vars]\`（会被提交进 git）。设法：
-> \`npx wrangler secret put JWT_SECRET\`（终端粘贴值回车）；CI 里用 \`echo "$SECRET" | npx wrangler secret put JWT_SECRET\`。
+> 三个都是 secret，**不要**写进 `wrangler.toml` 的 `[vars]`（会被提交进 git）。设法：
+> `npx wrangler secret put JWT_SECRET`（终端粘贴值回车）；CI 里用 `echo "$SECRET" | npx wrangler secret put JWT_SECRET`。
 
-### 3. 可选开关（\`[vars]\` 里，运行时 \`env\` 读）
+### 3. 可选开关（`[vars]` 里，运行时 `env` 读）
 
 | 名字 | 默认 | 作用 | 说明 |
 |---|---|---|---|
-| \`BOOTSTRAP_ADMIN\` | 空 | 首次部署自动建管理员，格式 \`账号:密码\`（如 \`admin:MyPass123\`） | **建好后请清空**；只在该账号不存在时生效，不会覆盖已有密码 |
-| \`PUBLIC_APP_NAME\` | \`PAN R2\` | 页面标题/品牌名 | 纯展示 |
-| \`LOG_VISITS\` | \`1\`（开） | 访问日志开关，\`0\` 关 | 关掉后 \`/api/visits\` 不再记录新行 |
-| \`VISIT_KEEP_DAYS\` | \`15\` | 访问日志保留天数，定时任务超期清理 | 设 0/空则用默认 |
-| \`TRASH_KEEP_HOURS\` | \`24\` | 回收站保留小时数，过期自动真删 | 也可在 D1 \`settings\` 表里用 \`trash_keep_hours\` 覆盖（变量优先） |
+| `BOOTSTRAP_ADMIN` | 空 | 首次部署自动建管理员，格式 `账号:密码`（如 `admin:MyPass123`） | **建好后请清空**；只在该账号不存在时生效，不会覆盖已有密码 |
+| `PUBLIC_APP_NAME` | `PAN R2` | 页面标题/品牌名 | 纯展示 |
+| `LOG_VISITS` | `1`（开） | 访问日志开关，`0` 关 | 关掉后 `/api/visits` 不再记录新行 |
+| `VISIT_KEEP_DAYS` | `15` | 访问日志保留天数，定时任务超期清理 | 设 0/空则用默认 |
+| `TRASH_KEEP_HOURS` | `24` | 回收站保留小时数，过期自动真删 | 也可在 D1 `settings` 表里用 `trash_keep_hours` 覆盖（变量优先） |
 
 ### 4. 构建期 / CI 环境变量（只在脚本和 Actions 里用，不进 Worker 运行时）
 
 | 名字 | 用在哪 | 作用 |
 |---|---|---|
-| \`CLOUDFLARE_API_TOKEN\` | \`wrangler deploy\` / CI | 部署令牌，权限见「八、部署步骤 → 方式三」 |
-| \`CLOUDFLARE_ACCOUNT_ID\` | \`wrangler deploy\` / CI | CF 账号 id |
-| \`D1_DATABASE_ID\` | \`npm run deploy:env\` | 渲染进 toml 的 \`database_id\` |
-| \`KV_NAMESPACE_ID\` | \`npm run deploy:env\` | 渲染进 toml 的 KV \`id\` |
-| \`CF_TOKEN\` / \`CF_ACCOUNT_ID\` / \`D1_ID\` | \`node scripts/d1-apply.mjs\` | 用 HTTP API 建表（CI/无 wrangler 环境） |
+| `CLOUDFLARE_API_TOKEN` | `wrangler deploy` / CI | 部署令牌，权限见「八、部署步骤 → 方式三」 |
+| `CLOUDFLARE_ACCOUNT_ID` | `wrangler deploy` / CI | CF 账号 id |
+| `D1_DATABASE_ID` | `npm run deploy:env` | 渲染进 toml 的 `database_id` |
+| `KV_NAMESPACE_ID` | `npm run deploy:env` | 渲染进 toml 的 KV `id` |
+| `CF_TOKEN` / `CF_ACCOUNT_ID` / `D1_ID` | `node scripts/d1-apply.mjs` | 用 HTTP API 建表（CI/无 wrangler 环境） |
 
 ### 一句话记忆
 
-- **数据库/缓存那两个 id** → 部署前注进 toml（\`npm run deploy:env\`），运行时改不了。
-- **三个 secret**（\`JWT_SECRET\` / \`MASTER_KEY\` / \`PUBLIC_SECRET\`）→ \`wrangler secret put\`，绝不进仓库。
-- **五个 vars**（\`BOOTSTRAP_ADMIN\` / \`PUBLIC_APP_NAME\` / \`LOG_VISITS\` / \`VISIT_KEEP_DAYS\` / \`TRASH_KEEP_HOURS\`）→ 写在 \`[vars]\`，可随时在控制台改。
+- **数据库/缓存那两个 id** → 部署前注进 toml（`npm run deploy:env`），运行时改不了。
+- **三个 secret**（`JWT_SECRET` / `MASTER_KEY` / `PUBLIC_SECRET`）→ `wrangler secret put`，绝不进仓库。
+- **五个 vars**（`BOOTSTRAP_ADMIN` / `PUBLIC_APP_NAME` / `LOG_VISITS` / `VISIT_KEEP_DAYS` / `TRASH_KEEP_HOURS`）→ 写在 `[vars]`，可随时在控制台改。
 
 ---
 
