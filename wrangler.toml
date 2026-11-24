@@ -1,11 +1,11 @@
-# PAN R2 —— 多账号 R2 聚合网盘
-# 部署：npm i && npx wrangler login && npx wrangler d1 create pan_r2
-#      把下面的 database_id / kv id 换成真实值后 npx wrangler deploy
-# ===== 部署前必填 =====
-# ⚠️ 下面的 database_id / [[kv_namespaces]] id 是占位符，部署前必须换成你自己的：
-#    npx wrangler d1 create pan_r2          → 打印 database_id
-#    npx wrangler kv:namespace create PAN_R2_KV → 打印 id
-# 也可以用环境变量注入：D1_DATABASE_ID=... KV_NAMESPACE_ID=... npm run deploy:env
+# PAN R2 鈥斺€?澶氳处鍙?R2 鑱氬悎缃戠洏
+# 閮ㄧ讲锛歯pm i && npx wrangler login && npx wrangler d1 create pan_r2
+#      鎶婁笅闈㈢殑 database_id / kv id 鎹㈡垚鐪熷疄鍊煎悗 npx wrangler deploy
+# ===== 閮ㄧ讲鍓嶅繀濉?=====
+# 鈿狅笍 涓嬮潰鐨?database_id / [[kv_namespaces]] id 鏄崰浣嶇锛岄儴缃插墠蹇呴』鎹㈡垚浣犺嚜宸辩殑锛?
+#    npx wrangler d1 create pan_r2          鈫?鎵撳嵃 database_id
+#    npx wrangler kv:namespace create PAN_R2_KV 鈫?鎵撳嵃 id
+# 涔熷彲浠ョ敤鐜鍙橀噺娉ㄥ叆锛欴1_DATABASE_ID=... KV_NAMESPACE_ID=... npm run deploy:env
 # ======================
 
 name = "pan-r2"
@@ -13,37 +13,37 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 workers_dev = true
 
-# 前端静态文件（也可用 Pages 单独托管 web/）
+# 鍓嶇闈欐€佹枃浠讹紙涔熷彲鐢?Pages 鍗曠嫭鎵樼 web/锛?
 [assets]
 directory = "./web"
 binding = "ASSETS"
 
 [vars]
 PUBLIC_APP_NAME = "PAN R2"
-# 首次部署：管理员账号，形如 "admin:你的密码"。建议用环境变量 BOOTSTRAP_ADMIN 传入
-# （npm run deploy:env），建好管理员后保持空字符串，别把真实密码写进这个文件
+# 棣栨閮ㄧ讲锛氱鐞嗗憳璐﹀彿锛屽舰濡?"admin:浣犵殑瀵嗙爜"銆傚缓璁敤鐜鍙橀噺 BOOTSTRAP_ADMIN 浼犲叆
+# 锛坣pm run deploy:env锛夛紝寤哄ソ绠＄悊鍛樺悗淇濇寔绌哄瓧绗︿覆锛屽埆鎶婄湡瀹炲瘑鐮佸啓杩涜繖涓枃浠?
 BOOTSTRAP_ADMIN = ""
-# 访问日志（1/未设=开，0=关）
+# 璁块棶鏃ュ織锛?/鏈=寮€锛?=鍏筹級
 LOG_VISITS = "1"
-# 日志保留天数（定时任务每 15 天清一次，超过这么久就删）
+# 鏃ュ織淇濈暀澶╂暟锛堝畾鏃朵换鍔℃瘡 15 澶╂竻涓€娆★紝瓒呰繃杩欎箞涔呭氨鍒狅級
 VISIT_KEEP_DAYS = "15"
-# 回收站保留小时数（默认 24）：过期后自动真删
+# 鍥炴敹绔欎繚鐣欏皬鏃舵暟锛堥粯璁?24锛夛細杩囨湡鍚庤嚜鍔ㄧ湡鍒?
 TRASH_KEEP_HOURS = "24"
-# JWT 签名密钥请用 secret 设置，不要写在这里：
+# JWT 绛惧悕瀵嗛挜璇风敤 secret 璁剧疆锛屼笉瑕佸啓鍦ㄨ繖閲岋細
 #   npx wrangler secret put JWT_SECRET
-#   npx wrangler secret put MASTER_KEY     # 可选：加密账号密钥，强烈建议
-#   npx wrangler secret put PUBLIC_SECRET  # 前台访客凭证签名（不配则用 JWT_SECRET）
+#   npx wrangler secret put MASTER_KEY     # 鍙€夛細鍔犲瘑璐﹀彿瀵嗛挜锛屽己鐑堝缓璁?
+#   npx wrangler secret put PUBLIC_SECRET  # 鍓嶅彴璁垮鍑瘉绛惧悕锛堜笉閰嶅垯鐢?JWT_SECRET锛?
 
 [[d1_databases]]
 binding = "DB"
 database_name = "pan_r2"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "22b7a53e-4526-4f50-9ea2-3abd9a55e7db"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_YOUR_KV_ID"
+id = "7f86393a862e4994ae8bee814659b96c"
 
-# 定时清理访问日志：每 15 天一次（每月 1 日和 16 日 04:00 UTC）
+# 瀹氭椂娓呯悊璁块棶鏃ュ織锛氭瘡 15 澶╀竴娆★紙姣忔湀 1 鏃ュ拰 16 鏃?04:00 UTC锛?
 [triggers]
 crons = ["7 * * * *"]
 
