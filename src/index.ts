@@ -1,7 +1,7 @@
 import type { Env } from './types';
 import { expireTrash, expireUploads } from './extras';
 import { unzipHandler } from './extras';
-import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO } from './util';
+import { cookie, getCookie, HttpError, json, Need, setSetting, getSetting, nowISO, corsHeaders, isCorsTarget } from './util';
 import { hashPassword, signJWT, verifyJWT, verifyPassword } from './auth';
 import { encryptSecret } from './crypto';
 import * as store from './store';
@@ -64,6 +64,14 @@ function noteUser(a: { uid?: number; name?: string }) {
 
 export default {
   async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    const reqPath = new URL(req.url).pathname;
+    const corsTarget = isCorsTarget(reqPath);
+
+    // CORS 预检：分享直链 / 文件直读允许跨域，OPTIONS 直接回 204
+    if (req.method === 'OPTIONS' && corsTarget) {
+      return new Response(null, { status: 204, headers: corsHeaders(req) });
+    }
+
     currentUser = null;
     let res: Response;
     try {
@@ -100,6 +108,15 @@ export default {
       const task = logVisit(env, req, res, currentUser);
       if (ctx?.waitUntil) ctx.waitUntil(task);
       else await task;
+    }
+
+    // 跨域目标统一补 CORS 头（回显 Origin；Response 头可能只读，包一层）
+    if (corsTarget && res) {
+      try {
+        res = new Response(res.body, res);
+        const ch = corsHeaders(req);
+        for (const [k, v] of Object.entries(ch)) res.headers.set(k, v);
+      } catch { /* 包不动就保持原样 */ }
     }
     return res;
   },

@@ -67,3 +67,27 @@ export async function setSetting(env: { DB: D1Database }, key: string, value: st
 export function nowISO(): string {
   return new Date().toISOString();
 }
+
+/** 哪些路径需要放开跨域（分享直链 / 文件直读 / 代理抓取） */
+export function isCorsTarget(pathname: string): boolean {
+  return (
+    pathname.startsWith('/s/') ||
+    pathname.startsWith('/api/files/') ||
+    pathname.startsWith('/api/proxy-fetch')
+  );
+}
+
+/** 跨域响应头：回显 Origin，放开 Range 等头，暴露 Content-Range 等（视频直链可跨域播） */
+export function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get('Origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers':
+      req.headers.get('Access-Control-Request-Headers') || 'Range, Content-Type, Authorization',
+    'Access-Control-Expose-Headers':
+      'Content-Range, Content-Length, Accept-Ranges, Content-Disposition, X-Segment-Next',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
+}
