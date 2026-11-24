@@ -143,6 +143,27 @@ CREATE INDEX IF NOT EXISTS idx_accounts_enabled ON accounts(enabled);
 CREATE INDEX IF NOT EXISTS idx_visits_created ON visits(id DESC);
 CREATE INDEX IF NOT EXISTS idx_visits_ip ON visits(ip, id DESC);
 
+-- TG 入库任务进度（队列 consumer 每传完一片更新一次，面板实时读）
+CREATE TABLE IF NOT EXISTS tg_jobs (
+  id TEXT PRIMARY KEY,              -- 任务 id（每次 TG 收到的文件一个）
+  chat_id TEXT,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,            -- 总字节
+  phase TEXT NOT NULL DEFAULT 'queued', -- queued / downloading / uploading / done / failed
+  bytes_done INTEGER NOT NULL DEFAULT 0,
+  chunks_done INTEGER NOT NULL DEFAULT 0,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  upload_id TEXT,                   -- 关联 uploads.id
+  file_id TEXT,                     -- 完成后的 files.id
+  error TEXT,
+  dl_url TEXT,                      -- 下载地址（含 fileBase），供无状态续传
+  file_base TEXT,
+  file_secret TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tg_jobs_created ON tg_jobs(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

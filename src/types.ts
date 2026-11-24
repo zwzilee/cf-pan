@@ -12,6 +12,8 @@ export interface Env {
   LOG_VISITS?: string;
   /** 日志保留天数（定时清理用） */
   VISIT_KEEP_DAYS?: string;
+  /** TG 大文件异步队列 */
+  TG_QUEUE?: Queue<any>;
 }
 
 /** 账号池里的一条记录（secret 已解密为明文） */

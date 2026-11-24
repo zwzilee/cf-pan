@@ -28,6 +28,10 @@ export const DEFAULT_API_BASE = 'https://api.telegram.org';
 export interface TgConfig {
   botToken: string;
   secret: string;
+  /** 本地 Bot API 的静态文件服务基址（如 https://dsh.dante.us.ci/tgfile）；空 = 用云 /file 接口 */
+  fileBase: string;
+  /** 访问 fileBase 需要的请求头密钥（X-Tgfile-Secret） */
+  fileSecret: string;
   /** 允许的 chat id；空 = 不限制（任何能给 bot 发消息的人都能传） */
   allowed: string[];
   /** 落到哪个目录；null = 根目录 */
@@ -45,7 +49,7 @@ function isCustomBase(base: string): boolean {
 }
 
 export async function getTgConfig(env: Env): Promise<TgConfig> {
-  const [token, secret, allowed, folder, base, max, admins] = await Promise.all([
+  const [token, secret, allowed, folder, base, max, admins, fileBase, fileSecret] = await Promise.all([
     getSetting(env, 'tg_bot_token'),
     getSetting(env, 'tg_secret'),
     getSetting(env, 'tg_allowed'),
@@ -53,6 +57,8 @@ export async function getTgConfig(env: Env): Promise<TgConfig> {
     getSetting(env, 'tg_api_base'),
     getSetting(env, 'tg_max_bytes'),
     getSetting(env, 'tg_admins'),
+    getSetting(env, 'tg_file_base'),
+    getSetting(env, 'tg_file_secret'),
   ]);
   const apiBase = (base || '').trim().replace(/\/+$/, '') || DEFAULT_API_BASE;
   const autoMax = isCustomBase(apiBase) ? TG_LOCAL_MAX : TG_CLOUD_MAX;
@@ -71,6 +77,8 @@ export async function getTgConfig(env: Env): Promise<TgConfig> {
       .split(/[\s,]+/)
       .map((s) => s.trim())
       .filter(Boolean),
+    fileBase: (fileBase || '').trim().replace(/\/+$/, ''),
+    fileSecret: (fileSecret || '').trim(),
   };
 }
 
@@ -88,6 +96,8 @@ export async function saveTgConfig(
   if (patch.apiBase !== undefined)
     await setSetting(env, 'tg_api_base', patch.apiBase.trim().replace(/\/+$/, ''));
   if (patch.maxBytes !== undefined) await setSetting(env, 'tg_max_bytes', String(patch.maxBytes || 0));
+  if ((patch as any).fileBase !== undefined) await setSetting(env, 'tg_file_base', String((patch as any).fileBase).trim().replace(/\/+$/, ''));
+  if ((patch as any).fileSecret !== undefined) await setSetting(env, 'tg_file_secret', String((patch as any).fileSecret).trim());
   return getTgConfig(env);
 }
 
@@ -163,14 +173,79 @@ function fmtBytes(n: number): string {
   return (i ? x.toFixed(x < 10 ? 2 : 1) : x) + ' ' + u[i];
 }
 
+/* ------------------------- 入库任务进度（面板实时展示用） ------------------------- */
+
+export interface TgJob {
+  id: string;
+  chat_id: string | null;
+  name: string;
+  size: number;
+  phase: string; // queued / downloading / uploading / done / failed
+  bytes_done: number;
+  chunks_done: number;
+  chunks_total: number;
+  upload_id: string | null;
+  file_id: string | null;
+  error: string | null;
+  dl_url?: string | null;
+  file_base?: string | null;
+  file_secret?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function newJobId(): string {
+  return 'tj_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+export async function createJob(env: Env, chatId: string, name: string, size: number): Promise<string> {
+  const id = newJobId();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    'INSERT INTO tg_jobs (id, chat_id, name, size, phase, bytes_done, chunks_done, chunks_total, created_at, updated_at) VALUES (?,?,?,?,?,0,0,0,?,?)',
+  ).bind(id, chatId, name, size, 'queued', now, now).run();
+  return id;
+}
+
+export async function updateJob(env: Env, id: string, patch: Partial<TgJob>): Promise<void> {
+  const cols: string[] = [];
+  const vals: any[] = [];
+  for (const k of ['phase', 'bytes_done', 'chunks_done', 'chunks_total', 'upload_id', 'file_id', 'error', 'dl_url', 'file_base', 'file_secret'] as (keyof TgJob)[]) {
+    if (patch[k] !== undefined) { cols.push(`${k} = ?`); vals.push(patch[k]); }
+  }
+  cols.push('updated_at = ?'); vals.push(new Date().toISOString());
+  vals.push(id);
+  await env.DB.prepare(`UPDATE tg_jobs SET ${cols.join(', ')} WHERE id = ?`).bind(...vals).run();
+}
+
+export async function listJobs(env: Env, limit = 50): Promise<TgJob[]> {
+  const r = await env.DB.prepare('SELECT * FROM tg_jobs ORDER BY created_at DESC LIMIT ?').bind(limit).all<any>();
+  return (r.results || []) as TgJob[];
+}
+
+export async function jobStats(env: Env): Promise<{ queued: number; active: number; done: number; failed: number; total: number; bytesDone: number }> {
+  const rows = await env.DB.prepare('SELECT phase, COUNT(*) c, SUM(bytes_done) b FROM tg_jobs GROUP BY phase').all<any>();
+  const rs = (rows.results || []) as any[];
+  const g = (p: string) => Number((rs.find((x) => x.phase === p) || {}).c || 0);
+  const total = rs.reduce((a, x) => a + Number(x.c || 0), 0);
+  const bytesDone = rs.reduce((a, x) => a + Number(x.b || 0), 0);
+  return {
+    queued: g('queued'),
+    active: g('downloading') + g('uploading'),
+    done: g('done'),
+    failed: g('failed'),
+    total,
+    bytesDone,
+  };
+}
+
+
 interface Picked {
   fileId: string;
   name: string;
   size: number;
   mime: string | null;
-}
-
-function pickFile(msg: any): Picked | null {
+}function pickFile(msg: any): Picked | null {
   if (msg.document) {
     const d = msg.document;
     return { fileId: d.file_id, name: d.file_name || `document_${msg.message_id}`, size: d.file_size || 0, mime: d.mime_type || null };
@@ -320,42 +395,388 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     return { ok: true, skipped: 'too big: ' + picked.size };
   }
 
+  // 开始处理前先回执，让用户立刻知道"收到了、在存"
+  try {
+    await reply(`📥 收到「${picked.name}」（${fmtBytes(picked.size || 0)}），正在存入网盘…`);
+  } catch {
+    /* ignore */
+  }
+
+  // 建一条进度任务，面板能实时看到 queued → downloading → uploading → done
+  const jobId = await createJob(env, chatId, picked.name, picked.size || 0).catch(() => '');
+
+  const folderLabel = async (): Promise<string> => {
+    const fid = await ensureChatFolder(env, chan.folder_id, chatId);
+    return chatId + '（目录 #' + fid + '）';
+  };
+
   // 1) getFile → 临时下载路径
   let info: any;
   try {
     info = await tgApi(cfg.botToken, 'getFile', { file_id: picked.fileId }, cfg.apiBase);
   } catch (e: any) {
     const m = String(e?.message || e);
-    await reply(`拉取失败：${m}\n（云 API 对超过 20MB 的文件会直接拒掉）`);
+    await reply(`❌ 存入失败（拉取文件）：${m}\n（云 API 对超过 20MB 的文件会直接拒掉，大文件请确保走本地 Bot API）`);
     return { ok: true, skipped: 'getFile failed', error: m };
   }
   const filePath = info.file_path as string;
-  if (!filePath) throw new Error('getFile 没返回 file_path');
-
-  // 2) 下载内容
-  const dl = await fetch(`${cfg.apiBase.replace(/\/+$/, '')}/file/bot${cfg.botToken}/${filePath}`);
-  if (!dl.ok) throw new Error(`下载失败 HTTP ${dl.status}`);
-  const buf = await dl.arrayBuffer();
-  const size = buf.byteLength;
-
-  // 3) 落盘（单片：单片上限 100MB，超过就按 100MB 切片）
-  const chunkSize = Math.min(Math.max(Math.min(size, MAX_CHUNK), MIN_CHUNK), MAX_CHUNK);
-  const targetFolder = await ensureChatFolder(env, chan.folder_id, chatId);
-  const up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
-  const total = Math.max(1, Math.ceil(size / chunkSize));
-  for (let i = 0; i < total; i++) {
-    const s = i * chunkSize;
-    await putChunk(env, up.uploadId, i, buf.slice(s, Math.min(size, s + chunkSize)));
+  if (!filePath) {
+    await reply('❌ 存入失败：getFile 没返回 file_path');
+    return { ok: true, skipped: 'no file_path' };
   }
-  const done = await completeUpload(env, up.uploadId);
 
-  await setSetting(env, 'tg_last_at', new Date().toISOString());
-  await env.DB.prepare('UPDATE tg_channels SET last_at = ? WHERE id = ?').bind(new Date().toISOString(), chan.id).run();
-  await reply(`✅ 已存入网盘：${picked.name}（${fmtBytes(size)}）`);
-  return { ok: true, fileId: done.fileId, name: picked.name, size };
+  // 2) 下载 + 3) 落盘 —— 全程 try/catch，任何异常都回执给用户
+  let size = 0;
+  try {
+    // 本地 Bot API Server 的 getFile 返回绝对路径（如 /var/lib/telegram-bot-api/<tok>/xxx），
+    // 云 API 返回相对路径（如 documents/file_1.pdf）。下载 URL 只接相对部分：
+    //   云：  {base}/file/bot{token}/{file_path}
+    //   本地：{base}/file/bot{token}/{相对路径}（把盘符/绝对前缀剥掉，只留 token 之后那段）
+    let rel = String(filePath).replace(/\\/g, '/');
+    // 统一成「相对 file 接口的路径」：
+    //   云 API:      documents/file_1.pdf            （已是相对）
+    //   本地 Bot API: 可能是绝对路径 /var/lib/telegram-bot-api/<token>/photos/file_2.jpg
+    //               也可能是 <token>/photos/file_2.jpg —— 都要剥到 <token>/ 之后的相对段
+    const marker = `/bot${cfg.botToken}/`;
+    const mi = rel.indexOf(marker);
+    if (mi >= 0) {
+      rel = rel.slice(mi + marker.length);
+    } else {
+      // 剥掉「<数字id>:<hash>/」这一段 token 目录前缀（本地 API 的落盘结构）
+      rel = rel.replace(/^.*?(\d+:[A-Za-z0-9_-]+\/)/, '').replace(/^\/+/, '');
+      // 兜底：仍带绝对盘路径前缀时，只留最后两段 photos/xxx 或 documents/xxx
+    }
+    if (/^\d+:[A-Za-z0-9_-]+\//.test(rel)) rel = rel.replace(/^\d+:[A-Za-z0-9_-]+\//, '');
+
+    // 下载地址两种走法：
+    //   ① 配了 tg_file_base（本地 Bot API 10.5 没有 /file/ 路由，由 nginx 静态服务磁盘）
+    //        {fileBase}/<token>/<rel>，带 X-Tgfile-Secret 头
+    //   ② 没配：官方 /file/bot<token>/<rel>
+    let dl: Response;
+    let dlUrl: string;
+    if (cfg.fileBase) {
+      // rel 已剥成 photos/file_5.jpg 这种相对段；静态服务目录结构是 <token>/photos/file_5.jpg
+      dlUrl = `${cfg.fileBase}/${cfg.botToken}/${rel}`;
+      const headers: Record<string, string> = {};
+      if (cfg.fileSecret) headers['X-Tgfile-Secret'] = cfg.fileSecret;
+      dl = await fetch(dlUrl, { headers });
+    } else {
+      dlUrl = `${cfg.apiBase.replace(/\/+$/, '')}/file/bot${cfg.botToken}/${rel}`;
+      dl = await fetch(dlUrl);
+    }
+    if (!dl.ok) throw new Error(`下载失败 HTTP ${dl.status}（路径 ${rel} · URL ${dlUrl}）`);
+    // 大文件不能整块读进内存（Worker 内存 ~128MB，文件可到 2GB）：
+    // 用 Content-Length 拿总大小，再按 Range 分块逐片拉取 + 逐片上传，全程只驻留一片。
+    const contentLen = Number(dl.headers.get('content-length') || 0);
+    let size0 = contentLen;
+    if (!size0) {
+      // 没有 Content-Length 兜底：整块读（小文件才走这里）
+      const b0 = await dl.arrayBuffer();
+      size0 = b0.byteLength;
+    } else {
+      // 释放首个响应体（这里只用来探大小），后面按 Range 重新取
+      try { await dl.body?.cancel(); } catch { /* ignore */ }
+    }
+    size = size0;
+
+    const TG_CHUNK = 25 * 1024 * 1024;
+    const chunkSize = Math.min(Math.max(Math.min(size, TG_CHUNK), MIN_CHUNK), TG_CHUNK);
+    const targetFolder = await ensureChatFolder(env, chan.folder_id, chatId);
+
+    // ★ 续传：同一 chat + 同文件名 + 同大小 + 同 chunkSize 且还在 uploading 的会话，
+    //   直接复用上次的 uploadId，已落库的片 putChunk 会自动 skipped，不重传。
+    let resumeId = '';
+    const prev = await env.DB.prepare(
+      `SELECT id FROM uploads WHERE name = ? AND size = ? AND chunk_size = ? AND status = 'uploading'
+         AND id IN (SELECT upload_id FROM tg_jobs WHERE chat_id = ? AND name = ? ORDER BY created_at DESC LIMIT 3)
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(picked.name, size, chunkSize, chatId, picked.name)
+      .first<any>()
+      .catch(() => null);
+    if (prev?.id) resumeId = String(prev.id);
+
+    let up: { uploadId: string; chunkSize: number; chunksCount: number };
+    let resumed = false;
+    if (resumeId) {
+      const cnt = await env.DB.prepare('SELECT COUNT(*) c FROM chunks WHERE file_id = ?').bind(resumeId).first<any>().catch(() => null);
+      up = { uploadId: resumeId, chunkSize, chunksCount: Math.max(1, Math.ceil(size / chunkSize)) };
+      resumed = true;
+      const have = Number(cnt?.c || 0);
+      if (jobId) await updateJob(env, jobId, { phase: 'downloading', size, upload_id: resumeId, chunks_done: have }).catch(() => {});
+      await reply(`♻️ 检测到未完成的上传（已 ${have} 片），从断点续传…`).catch(() => {});
+    } else {
+      up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
+    }
+    const total = Math.max(1, Math.ceil(size / chunkSize));
+    if (jobId)
+      await updateJob(env, jobId, {
+        phase: 'downloading', size, chunks_total: total, upload_id: up.uploadId,
+        dl_url: dlUrl, file_base: cfg.fileBase || '', file_secret: cfg.fileSecret || '',
+      }).catch(() => {});
+
+    // ★ 免费计划单次 invocation 只有 50 个 subrequest，一大文件几十片必然打爆
+    //   （实测 1.68GB 在 22 片时 Too many subrequests）。
+    //   所以拆分：按 CHUNKS_PER_MSG 片一组，每组一条独立的 Queue 消息处理，
+    //   每组 subrequest 预算重新算。全部片传完后由最后一条消息 completeUpload + 回执。
+    const CHUNKS_PER_MSG = 3; // 3片≈3次下载+3次S3+~18次D1，控制在50以内
+    const dlBase = dlUrl;
+    if (env.TG_QUEUE) {
+      // 入队所有批次；每条消息自带所需上下文（不依赖闭包，跨 invocation）
+      const common = {
+        kind: 'chunk-batch' as const,
+        jobId,
+        uploadId: up.uploadId,
+        name: picked.name,
+        size,
+        chunkSize,
+        total,
+        dlUrl: dlBase,
+        fileBase: cfg.fileBase,
+        fileSecret: cfg.fileSecret,
+        chatId,
+        chanId: chan.id,
+        folderId: chan.folder_id,
+        hasFileContentLen: contentLen > 0,
+      };
+      // ★ 续传：找出已落库的片，只为缺失的片生成批次（已传的跳过，不重复入队）
+      const haveRows = await env.DB.prepare('SELECT idx FROM chunks WHERE file_id = ?').bind(up.uploadId).all<any>().catch(() => null);
+      const haveSet = new Set<number>(((haveRows?.results || []) as any[]).map((r) => Number(r.idx)));
+      const missing: number[] = [];
+      for (let i = 0; i < total; i++) if (!haveSet.has(i)) missing.push(i);
+      // 按连续段切成 ≤CHUNKS_PER_MSG 的批次
+      const ranges: { from: number; to: number }[] = [];
+      let cur: number[] = [];
+      for (const i of missing) {
+        if (cur.length && i !== cur[cur.length - 1] + 1) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+        cur.push(i);
+        if (cur.length >= CHUNKS_PER_MSG) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+      }
+      if (cur.length) ranges.push({ from: cur[0], to: cur[cur.length - 1] });
+      const batchRanges = ranges.length ? ranges : [{ from: 0, to: Math.min(total, CHUNKS_PER_MSG) - 1 }];
+      if (missing.length === 0 && total > 0) {
+        // 所有片都已落库 → 直接完成
+        const done = await completeUpload(env, up.uploadId);
+        if (jobId) await updateJob(env, jobId, { phase: 'done', chunks_done: total, bytes_done: size, file_id: done.fileId }).catch(() => {});
+        await reply(`✅ 已存入网盘：${picked.name}（${fmtBytes(size)}）\n目录：${chatId}（目录 #${chan.folder_id ?? 'root'}）`).catch(() => {});
+        return { ok: true, fileId: done.fileId, name: picked.name, size };
+      }
+      for (let b = 0; b < batchRanges.length; b++) {
+        const r = batchRanges[b];
+        await env.TG_QUEUE.send({ ...common, from: r.from, to: r.to, isLast: b === batchRanges.length - 1 });
+      }
+      // 已入队，回执已由「📥 收到」给过，最终结果由最后一批消息回
+      return { ok: true, queued: true, batches: batchRanges.length, total, missing: missing.length };
+    }
+
+    // 无队列时退化：同步跑（小文件够用）
+    const baseHeaders: Record<string, string> = {};
+    if (cfg.fileBase && cfg.fileSecret) baseHeaders['X-Tgfile-Secret'] = cfg.fileSecret;
+    const CONCURRENCY = Math.min(3, total);
+    let nextIdx = 0;
+    let doneChunks = 0;
+    let doneBytes = 0;
+    const worker = async () => {
+      while (true) {
+        const i = nextIdx++;
+        if (i >= total) break;
+        const s = i * chunkSize;
+        const e = Math.min(size, s + chunkSize) - 1;
+        let part: ArrayBuffer;
+        if (size <= MIN_CHUNK && contentLen === 0) {
+          const r = await fetch(dlUrl, { headers: baseHeaders });
+          part = await r.arrayBuffer();
+        } else {
+          const r = await fetch(dlUrl, { headers: { ...baseHeaders, Range: `bytes=${s}-${e}` } });
+          if (!r.ok && r.status !== 206) throw new Error(`分块下载失败 HTTP ${r.status}（${s}-${e}）`);
+          part = await r.arrayBuffer();
+        }
+        await putChunk(env, up.uploadId, i, part);
+        doneChunks++;
+        doneBytes = Math.min(size, doneBytes + part.byteLength);
+        if (jobId)
+          await updateJob(env, jobId, { phase: 'uploading', chunks_done: doneChunks, bytes_done: doneBytes }).catch(() => {});
+      }
+    };
+    const runners: Promise<void>[] = [];
+    for (let k = 0; k < CONCURRENCY; k++) runners.push(worker());
+    await Promise.all(runners);
+    const done = await completeUpload(env, up.uploadId);
+    if (jobId) await updateJob(env, jobId, { phase: 'done', chunks_done: total, bytes_done: size, file_id: done.fileId }).catch(() => {});
+
+    await setSetting(env, 'tg_last_at', new Date().toISOString());
+    await env.DB.prepare('UPDATE tg_channels SET last_at = ? WHERE id = ?').bind(new Date().toISOString(), chan.id).run();
+    const dir = await folderLabel();
+    await reply(`✅ 已存入网盘：${picked.name}（${fmtBytes(size)}）\n目录：${dir}`);
+    return { ok: true, fileId: done.fileId, name: picked.name, size };
+  } catch (e: any) {
+    const m = String(e?.message || e);
+    if (jobId) await updateJob(env, jobId, { phase: 'failed', error: m }).catch(() => {});
+    await reply(`❌ 存入失败：${m}\n文件：${picked.name}（${fmtBytes(size || picked.size || 0)}）`);
+    return { ok: true, skipped: 'store failed', error: m };
+  }
 }
 
 /* ------------------------- TG 通道（每个通道 = 一个目录 + 一份白名单） ------------------------- */
+
+export interface TgChunkBatchMsg {
+  kind: 'chunk-batch';
+  jobId: string;
+  uploadId: string;
+  name: string;
+  size: number;
+  chunkSize: number;
+  total: number;
+  dlUrl: string;
+  fileBase: string;
+  fileSecret: string;
+  chatId: string;
+  chanId: string;
+  folderId: number | null;
+  hasFileContentLen: boolean;
+  from: number;
+  to: number;
+  isLast: boolean;
+}
+
+/**
+ * 处理一批分片（跨多次 Queue 消息，绕开免费计划单次 50 subrequest 上限）。
+ * 每批下载 [from,to] 片并 putChunk；更新进度；isLast 时 completeUpload + 回执。
+ */
+export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<void> {
+  const cfg = await getTgConfig(env);
+  const baseHeaders: Record<string, string> = {};
+  if (m.fileBase && m.fileSecret) baseHeaders['X-Tgfile-Secret'] = m.fileSecret;
+
+  // 幂等：跳过已上传的片
+  let job = m.jobId ? await env.DB.prepare('SELECT * FROM tg_jobs WHERE id = ?').bind(m.jobId).first<any>() : null;
+
+  for (let i = m.from; i <= m.to; i++) {
+    const s = i * m.chunkSize;
+    const e = Math.min(m.size, s + m.chunkSize) - 1;
+    const r = await fetch(m.dlUrl, { headers: { ...baseHeaders, Range: `bytes=${s}-${e}` } });
+    if (!r.ok && r.status !== 206) throw new Error(`分块下载失败 HTTP ${r.status}（${s}-${e}）`);
+    const part = await r.arrayBuffer();
+    await putChunk(env, m.uploadId, i, part);
+  }
+
+  // 进度按已落库的 chunks 数算（更准，且并发安全）
+  if (m.jobId) {
+    const cnt = await env.DB.prepare('SELECT COUNT(*) c, COALESCE(SUM(size),0) b FROM chunks WHERE file_id = ?')
+      .bind(m.uploadId)
+      .first<any>();
+    await updateJob(env, m.jobId, {
+      phase: 'uploading',
+      chunks_done: Number(cnt?.c || 0),
+      bytes_done: Math.min(m.size, Number(cnt?.b || 0)),
+      chunks_total: m.total,
+    }).catch(() => {});
+  }
+
+  if (!m.isLast) return;
+
+  // 最后一批：先核对所有片是否齐全，缺片则重新入队补传（不 complete，避免坏文件）
+  const cntAll = await env.DB.prepare('SELECT COUNT(*) c FROM chunks WHERE file_id = ?').bind(m.uploadId).first<any>();
+  const have = Number(cntAll?.c || 0);
+  if (have < m.total) {
+    // 找回缺的片，重新入队（幂等，已传的会 skipped）
+    if (m.jobId) await updateJob(env, m.jobId, { phase: 'uploading', chunks_done: have, chunks_total: m.total }).catch(() => {});
+    if (env.TG_QUEUE) {
+      const rows = await env.DB.prepare('SELECT idx FROM chunks WHERE file_id = ?').bind(m.uploadId).all<any>().catch(() => null);
+      const haveSet = new Set<number>(((rows?.results || []) as any[]).map((r) => Number(r.idx)));
+      const missing: number[] = [];
+      for (let i = 0; i < m.total; i++) if (!haveSet.has(i)) missing.push(i);
+      const ranges: { from: number; to: number }[] = [];
+      let cur: number[] = [];
+      for (const i of missing) {
+        if (cur.length && i !== cur[cur.length - 1] + 1) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+        cur.push(i);
+        if (cur.length >= 3) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+      }
+      if (cur.length) ranges.push({ from: cur[0], to: cur[cur.length - 1] });
+      const base = { ...m };
+      for (let b = 0; b < ranges.length; b++) {
+        await env.TG_QUEUE.send({ ...base, from: ranges[b].from, to: ranges[b].to, isLast: b === ranges.length - 1 });
+      }
+      return;
+    }
+    throw new Error(`分片不齐：${have}/${m.total}`);
+  }
+
+  // 片齐了：完成合并 + 回执
+  const done = await completeUpload(env, m.uploadId);
+  if (m.jobId) await updateJob(env, m.jobId, { phase: 'done', chunks_done: m.total, bytes_done: m.size, file_id: done.fileId }).catch(() => {});
+  await setSetting(env, 'tg_last_at', new Date().toISOString());
+  await env.DB.prepare('UPDATE tg_channels SET last_at = ? WHERE id = ?').bind(new Date().toISOString(), m.chanId).run().catch(() => {});
+  const dir = m.chatId + '（目录 #' + (m.folderId == null ? 'root' : m.folderId) + '）';
+  await tgApi(cfg.botToken, 'sendMessage', {
+    chat_id: m.chatId,
+    text: `✅ 已存入网盘：${m.name}（${fmtBytes(m.size)}）\n目录：${dir}`,
+  }, cfg.apiBase).catch(() => {});
+}
+
+/**
+ * 重跑某个 job 的缺失分片（管理接口用）。从 job 里存的 dl_url/file_base 无状态重建批次，
+ * 缺片自动补传，全齐则直接完成。返回补发批次数。
+ */
+export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean; missing: number; batches: number; done?: boolean; error?: string }> {
+  const job = await env.DB.prepare('SELECT * FROM tg_jobs WHERE id = ?').bind(jobId).first<any>();
+  if (!job) return { ok: false, missing: 0, batches: 0, error: 'job 不存在' };
+  if (job.phase === 'done') return { ok: true, missing: 0, batches: 0, done: true };
+  const uploadId = job.upload_id;
+  if (!uploadId) return { ok: false, missing: 0, batches: 0, error: '该 job 未建立上传会话（还没下载阶段）' };
+  const dlUrl = job.dl_url;
+  if (!dlUrl) return { ok: false, missing: 0, batches: 0, error: '该 job 未记录下载地址（旧版本任务无法续传）' };
+
+  const up = await env.DB.prepare('SELECT chunk_size, chunks_count, folder_id FROM uploads WHERE id = ?').bind(uploadId).first<any>();
+  if (!up) return { ok: false, missing: 0, batches: 0, error: '上传会话不存在' };
+  const chunkSize = Number(up.chunk_size);
+  const total = Number(up.chunks_count);
+  const size = Number(job.size);
+
+  const rows = await env.DB.prepare('SELECT idx FROM chunks WHERE file_id = ?').bind(uploadId).all<any>();
+  const have = new Set<number>(((rows.results || []) as any[]).map((r) => Number(r.idx)));
+  const missing: number[] = [];
+  for (let i = 0; i < total; i++) if (!have.has(i)) missing.push(i);
+
+  if (missing.length === 0) {
+    const done = await completeUpload(env, uploadId);
+    await updateJob(env, jobId, { phase: 'done', chunks_done: total, bytes_done: size, file_id: done.fileId }).catch(() => {});
+    return { ok: true, missing: 0, batches: 0, done: true };
+  }
+
+  // 连续段切成 ≤3 片的批次
+  const ranges: { from: number; to: number }[] = [];
+  let cur: number[] = [];
+  for (const i of missing) {
+    if (cur.length && i !== cur[cur.length - 1] + 1) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+    cur.push(i);
+    if (cur.length >= 3) { ranges.push({ from: cur[0], to: cur[cur.length - 1] }); cur = []; }
+  }
+  if (cur.length) ranges.push({ from: cur[0], to: cur[cur.length - 1] });
+
+  const common: TgChunkBatchMsg = {
+    kind: 'chunk-batch',
+    jobId,
+    uploadId,
+    name: job.name,
+    size,
+    chunkSize,
+    total,
+    dlUrl,
+    fileBase: job.file_base || '',
+    fileSecret: job.file_secret || '',
+    chatId: String(job.chat_id),
+    chanId: '',
+    folderId: up.folder_id == null ? null : Number(up.folder_id),
+  } as TgChunkBatchMsg;
+  if (!env.TG_QUEUE) return { ok: false, missing: missing.length, batches: 0, error: '无队列绑定' };
+  for (let b = 0; b < ranges.length; b++) {
+    await env.TG_QUEUE.send({ ...common, from: ranges[b].from, to: ranges[b].to, isLast: b === ranges.length - 1 });
+  }
+  await updateJob(env, jobId, { phase: 'uploading', chunks_done: have.size, chunks_total: total }).catch(() => {});
+  return { ok: true, missing: missing.length, batches: ranges.length };
+}
 
 export interface TgChannel {
   id: string;

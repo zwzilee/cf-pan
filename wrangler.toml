@@ -43,6 +43,18 @@ database_id = "22b7a53e-4526-4f50-9ea2-3abd9a55e7db"
 binding = "KV"
 id = "7f86393a862e4994ae8bee814659b96c"
 
+# TG 大文件异步队列：webhook 立即返回，真正下载+入库在 consumer 里跑（最长 15 分钟）
+[[queues.producers]]
+binding = "TG_QUEUE"
+queue = "tg-upload"
+
+[[queues.consumers]]
+queue = "tg-upload"
+max_batch_size = 1
+max_batch_timeout = 5
+max_concurrency = 2
+max_retries = 2
+
 # 瀹氭椂娓呯悊璁块棶鏃ュ織锛氭瘡 15 澶╀竴娆★紙姣忔湀 1 鏃ュ拰 16 鏃?04:00 UTC锛?
 [triggers]
 crons = ["7 * * * *"]

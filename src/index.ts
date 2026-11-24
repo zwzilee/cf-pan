@@ -20,10 +20,15 @@ import {
   registerTgWebhook,
   saveTgConfig,
   handleTgUpdate,
+  processChunkBatch,
+  resumeJob,
+  tgApi,
   listChannels,
   createChannel,
   updateChannel,
   deleteChannel,
+  listJobs,
+  jobStats,
 } from './tg';
 import {
   createSheet,
@@ -133,6 +138,48 @@ export default {
     await setSetting(env, 'last_trash_sweep', new Date().toISOString());
     console.log(`trash expired: ${tr.files} files / ${tr.folders} folders (keep ${tr.hours}h)`);
     ctx.waitUntil(Promise.resolve());
+  },
+  // TG 大文件队列消费者：真正做「getFile → 从 tgfile 分片下载 → 分片存网盘 → 回执」。
+  // 一次最多一个消息（max_batch_size=1），最长可跑 15 分钟，够 2GB 文件。
+  async queue(batch: MessageBatch<{ update?: any; kind?: string }>, env: Env): Promise<void> {
+    for (const msg of batch.messages) {
+      const body: any = msg.body || {};
+      // 分片批次消息：跨多次 invocation，避开免费计划单次 50 subrequest 上限
+      if (body.kind === 'chunk-batch') {
+        try {
+          await processChunkBatch(env, body as any);
+          msg.ack();
+        } catch (e: any) {
+          const m = e?.message || String(e);
+          console.log('tg chunk-batch error: ' + m);
+          try {
+            const c = await getTgConfig(env);
+            if (c.botToken && body.chatId)
+              await tgApi(c.botToken, 'sendMessage', { chat_id: String(body.chatId), text: `❌ 存入失败：${m}` }, c.apiBase);
+          } catch { /* ignore */ }
+          msg.ack();
+        }
+        continue;
+      }
+      const update = body.update;
+      if (!update) { msg.ack(); continue; }
+      try {
+        await handleTgUpdate(env, update);
+        msg.ack();
+      } catch (e: any) {
+        const m = e?.message || String(e);
+        console.log('tg queue handle error: ' + m);
+        try {
+          const c = await getTgConfig(env);
+          const um = (update as any)?.message || (update as any)?.channel_post;
+          const cid = um?.chat?.id;
+          if (c.botToken && cid)
+            await tgApi(c.botToken, 'sendMessage', { chat_id: String(cid), text: `❌ 处理失败：${m}` }, c.apiBase);
+        } catch { /* ignore */ }
+        // 重试一次；仍失败则进死信（这里直接 ack，避免无限重试刷屏）
+        msg.ack();
+      }
+    }
   },
 };
 
@@ -284,6 +331,14 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/tg/unregister' && m === 'POST') return await tgUnregisterHandler(req, env);
   if (p === '/api/tg/channels' && m === 'GET') return await tgChannelsHandler(req, env);
   if (p === '/api/tg/channels' && m === 'POST') return await tgChannelCreateHandler(req, env);
+  if (p === '/api/tg/progress' && m === 'GET') return await tgProgressHandler(req, env);
+  if (p === '/api/tg/resume' && m === 'POST') {
+    await requireAdmin(req, env);
+    const body: any = await req.json().catch(() => ({}));
+    if (!body.jobId) return json({ ok: false, error: 'missing jobId' }, { status: 400 });
+    const r = await resumeJob(env, String(body.jobId));
+    return json(r, { status: r.ok ? 200 : 400 });
+  }
   if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'channels' && seg[3] && m === 'PATCH')
     return await tgChannelUpdateHandler(req, env, seg[3]);
   if (seg[0] === 'api' && seg[1] === 'tg' && seg[2] === 'channels' && seg[3] && m === 'DELETE')
@@ -946,7 +1001,9 @@ async function publicShare(req: Request, env: Env, token: string, action?: strin
   const isRange = !!req.headers.get('Range');
   const rec = await checkShareUsable(env, claims, !isRange, Number(file.size || 0), qcode);
   if (rec.max > 0 && rec.used > rec.max) throw new HttpError(410, '分享链接下载次数已用完');
-  return await serveFile(req, env, file);
+  // 视频/音频：默认内联播放（浏览器直接起播、可拖进度），想强制下载用 ?dl=1 之外再点页面按钮
+  const inline = /^video\//.test(mimeFor(file.name)) || /^audio\//.test(mimeFor(file.name));
+  return await serveFile(req, env, file, { inline });
 }
 
 function codePage(token: string, wrong: boolean): string {
@@ -986,16 +1043,28 @@ function sharePage(token: string, name: string, size: number, exp: number, remai
     }
     return n.toFixed(i ? 1 : 0) + ' ' + u[i];
   };
+  // 视频/音频文件在分享页直接内联播放，而不是只给一个下载按钮
+  const mime = mimeFor(name);
+  const isVideo = mime.startsWith('video/');
+  const isAudio = mime.startsWith('audio/');
+  const mediaBlock = isVideo
+    ? `<video class="player" controls playsinline preload="metadata" src="/s/${token}${token.includes('?') ? '&' : '?'}dl=1"></video>`
+    : isAudio
+    ? `<audio class="player-a" controls preload="metadata" src="/s/${token}${token.includes('?') ? '&' : '?'}dl=1"></audio>`
+    : '';
+  const wide = isVideo || isAudio;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(name)} · PAN R2</title>
 <style>
 :root{--bg:#0b0e14;--card:#131823;--line:#232b3a;--fg:#e8eefc;--mut:#8b97ad;--accent:#4f8cff;--ok:#2ec27e}
+.player{width:100%;max-width:${wide ? '960px' : '440px'};aspect-ratio:16/9;background:#000;border-radius:12px;display:block;margin:0 auto 18px}
+.player-a{width:100%;max-width:520px;display:block;margin:0 auto 18px}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
   background:radial-gradient(1200px 600px at 50% -10%,#1a2440 0%,var(--bg) 60%);color:var(--fg);
   font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 .c{background:linear-gradient(180deg,#161d2b,#121722);border:1px solid var(--line);border-radius:18px;
-  padding:34px 30px 26px;max-width:440px;width:calc(100% - 36px);text-align:center;
+  padding:34px 30px 26px;max-width:${wide ? '1000px' : '440px'};width:calc(100% - 36px);text-align:center;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.8)}
 .ico{width:52px;height:52px;margin:0 auto 16px;border-radius:14px;display:grid;place-items:center;
   background:linear-gradient(135deg,#2b4a8f,#1b2b4d);font-size:24px}
@@ -1006,9 +1075,10 @@ a.btn{display:block;background:linear-gradient(180deg,#5b96ff,#3f7bf0);color:#ff
 a.btn:hover{filter:brightness(1.08)}
 .f{margin-top:16px;color:#5f6b80;font-size:11px;line-height:1.8}
 </style></head>
-<body><div class="c"><div class="ico">🗂</div><h1>${esc(name)}</h1>
+<body><div class="c"><div class="ico">${isVideo ? '🎬' : isAudio ? '🎵' : '🗂'}</div><h1>${esc(name)}</h1>
 <div class="m">${gb(size)} · ${remaining >= 0 ? `剩余 ${remaining} 次下载` : '不限次数'}</div>
-<a class="btn" href="/s/${token}${token.includes('?') ? '&' : '?'}dl=1">下载文件</a>
+${mediaBlock}
+<a class="btn" href="/s/${token}${token.includes('?') ? '&' : '?'}dl=1"${wide ? ' download' : ''}>下载文件</a>
 <div class="f">有效期至 ${new Date(exp * 1000).toLocaleString('zh-CN')}<br>由 PAN R2 分享</div>
 </div></body></html>`;
 }
@@ -1427,6 +1497,9 @@ async function tgConfigView(env: Env) {
     folderName: c.folderId == null ? null : ((await env.DB.prepare('SELECT name FROM folders WHERE id = ?').bind(c.folderId).first<any>())?.name ?? null),
     apiBase: c.apiBase,
     customBase: c.apiBase !== 'https://api.telegram.org',
+    fileBase: c.fileBase,
+    fileSecretMasked: c.fileSecret ? '***' + c.fileSecret.slice(-4) : '',
+    fileSecretSet: !!c.fileSecret,
     maxBytes: c.maxBytes,
     admins: c.admins,
     webhookUrl: (await getSetting(env, 'tg_webhook_url')) || '',
@@ -1451,6 +1524,8 @@ async function tgSaveHandler(req: Request, env: Env, _ctx?: ExecutionContext): P
   if (typeof b.adminsRaw === 'string') patch.adminsRaw = b.adminsRaw;
   if (b.folderId !== undefined) patch.folderId = b.folderId === '' || b.folderId === null ? null : Number(b.folderId);
   if (typeof b.apiBase === 'string') patch.apiBase = b.apiBase;
+  if (typeof b.fileBase === 'string') patch.fileBase = b.fileBase;
+  if (typeof b.fileSecret === 'string') patch.fileSecret = b.fileSecret;
   if (b.maxBytes !== undefined) patch.maxBytes = Number(b.maxBytes) || 0;
   if (b.regenSecret) patch.secret = newTgSecret();
   let cfg = await saveTgConfig(env, patch);
@@ -1481,6 +1556,11 @@ async function tgUnregisterHandler(req: Request, env: Env): Promise<Response> {
 async function tgChannelsHandler(req: Request, env: Env): Promise<Response> {
   await requireAdmin(req, env);
   return json({ ok: true, channels: await listChannels(env) });
+}
+
+async function tgProgressHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  return json({ ok: true, stats: await jobStats(env), jobs: await listJobs(env, 80) });
 }
 
 async function tgChannelCreateHandler(req: Request, env: Env): Promise<Response> {
@@ -1540,9 +1620,31 @@ async function tgWebhook(req: Request, env: Env, secret: string, ctx?: Execution
       return json({ ok: false, error: String(e?.message || e) }, { status: 500 });
     }
   }
-  const task = handleTgUpdate(env, update).catch((e: any) =>
-    console.log('tg handle error: ' + (e?.message || String(e))),
-  );
+  // 大文件（视频/压缩包，可达 2GB）下载+入库远超 waitUntil 的 30s 上限，
+  // 所以统一丢进 Queue，consumer 里最长可跑 15 分钟。webhook 立刻返回 200。
+  if (env.TG_QUEUE) {
+    try {
+      await env.TG_QUEUE.send({ update });
+      return json({ ok: true, queued: true });
+    } catch (e: any) {
+      // 队列不可用时退回同步后台处理
+      console.log('tg enqueue failed, fallback waitUntil: ' + (e?.message || e));
+    }
+  }
+  const task = handleTgUpdate(env, update).catch(async (e: any) => {
+    const m = e?.message || String(e);
+    console.log('tg handle error: ' + m);
+    // 兜底回执：即使 handleTgUpdate 外层抛错，也尽量告诉用户失败了
+    try {
+      const c = await getTgConfig(env);
+      const msg = (update as any)?.message || (update as any)?.channel_post;
+      const cid = msg?.chat?.id;
+      if (c.botToken && cid)
+        await tgApi(c.botToken, 'sendMessage', { chat_id: String(cid), text: `❌ 处理失败：${m}` }, c.apiBase);
+    } catch {
+      /* ignore */
+    }
+  });
   if (ctx?.waitUntil) ctx.waitUntil(task);
   else await task;
   return json({ ok: true });
