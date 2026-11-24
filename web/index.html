@@ -156,7 +156,8 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 
 /* ---------- 统计卡 ---------- */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:20px}
-.stat{background:linear-gradient(180deg,#131a28,#101622);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:14px 16px;
+  backdrop-filter:blur(8px);box-shadow:0 8px 22px -18px rgba(0,0,0,.7)}
 .stat .k{color:var(--mut);font-size:11.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px}
 .stat .v{font-size:20px;font-weight:650;letter-spacing:.3px}
 .stat .v small{font-size:12px;color:var(--mut);font-weight:400;margin-left:3px}
@@ -165,7 +166,8 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 
 /* ---------- 列表 ---------- */
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-.dl{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.dl{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.09);border-radius:var(--r);overflow:hidden;
+  backdrop-filter:blur(8px);box-shadow:0 8px 22px -18px rgba(0,0,0,.7)}
 .dl-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid #1a2233}
 .dl-row:last-child{border-bottom:0}
 .dl-row:hover{background:#131b29}
@@ -260,7 +262,7 @@ table.grid td input.fx{color:#8fd0ff;font-weight:600}
 .star.on{color:#ffd166}
 .pickbar{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;background:#141b2b;border:1px solid #26324a;border-radius:12px;padding:10px 14px;display:flex;gap:8px;align-items:center;z-index:9995;box-shadow:0 10px 30px rgba(0,0,0,.45)}
 .searchbox{display:flex;gap:6px;margin-left:auto;margin-right:10px}
-.searchbox input{background:#0f1624;border:1px solid #253046;color:#dbe4f0;border-radius:9px;padding:7px 10px;font-size:13px;width:200px}
+.searchbox input{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.09);color:#dbe4f0;border-radius:9px;padding:7px 10px;font-size:13px;width:200px;backdrop-filter:blur(8px)}
 .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
 .pcard{background:#0f1624;border:1px solid #1e2940;border-radius:12px;overflow:hidden;cursor:pointer}
 .pcard img{width:100%;height:120px;object-fit:cover;display:block}

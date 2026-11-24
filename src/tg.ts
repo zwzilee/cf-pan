@@ -641,6 +641,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     return { ok: true, fileId: done.fileId, name: picked.name, size };
   } catch (e: any) {
     const m = String(e?.message || e);
+    console.log('tg store failed: ' + m);
     if (jobId) await updateJob(env, jobId, { phase: 'failed', error: m }).catch(() => {});
     await reply(`❌ 存入失败：${m}\n文件：${picked.name}（${fmtBytes(size || picked.size || 0)}）`);
     return { ok: true, skipped: 'store failed', error: m };
