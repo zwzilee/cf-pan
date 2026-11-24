@@ -1,6 +1,13 @@
 # PAN R2 —— 多账号 R2 聚合网盘
 # 部署：npm i && npx wrangler login && npx wrangler d1 create pan_r2
 #      把下面的 database_id / kv id 换成真实值后 npx wrangler deploy
+# ===== 部署前必填 =====
+# ⚠️ 下面的 database_id / [[kv_namespaces]] id 是占位符，部署前必须换成你自己的：
+#    npx wrangler d1 create pan_r2          → 打印 database_id
+#    npx wrangler kv:namespace create PAN_R2_KV → 打印 id
+# 也可以用环境变量注入：D1_DATABASE_ID=... KV_NAMESPACE_ID=... npm run deploy:env
+# ======================
+
 name = "pan-r2"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
@@ -30,11 +37,11 @@ TRASH_KEEP_HOURS = "24"
 [[d1_databases]]
 binding = "DB"
 database_name = "pan_r2"
-database_id = "22b7a53e-4526-4f50-9ea2-3abd9a55e7db"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "7f86393a862e4994ae8bee814659b96c"
+id = "REPLACE_WITH_YOUR_KV_ID"
 
 # 定时清理访问日志：每 15 天一次（每月 1 日和 16 日 04:00 UTC）
 [triggers]

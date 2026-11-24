@@ -4,13 +4,34 @@
 
 > 截图里 `70 账号 / 665GB / <1%` 就是这个思路：70 × ~9.5GB 实际可用 ≈ 665GB，一个前端看过去像一块大硬盘。
 
-线上实例：<https://pan-r2.isophia1205.workers.dev>
+仓库：<https://github.com/zwzilee/cf-pan>
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zwzilee/cf-pan)
 
 > 一键部署按钮**私库也能用**——前提是你自己点、且 Cloudflare Workers & Pages GitHub App 已授权这个仓库，详见「八、部署步骤 → 方式一」。
 >
 > 🔑 **权限全表见 [PERMISSIONS.md](./PERMISSIONS.md)**：R2 凭证、部署令牌、运维令牌、GitHub Actions、Telegram、Worker 运行时绑定，要开哪些、不要开哪些、每条权限组 id 都在那里面。
+
+---
+
+## 目录
+
+- [零、先拿 R2 凭证并接上账号（第一次部署必读）](#零先拿-r2-凭证并接上账号第一次部署必读)
+- [一、为什么这么设计（关键决策）](#一为什么这么设计关键决策)
+- [二、模块分层](#二模块分层)
+- [三、数据模型（schema.sql）](#三数据模型schemasql)
+- [四、分片上传时序](#四分片上传时序)
+- [五、下载 / Range 原理](#五下载--range-原理chunkts-planranges--streamdownload)
+- [六、认证与权限（前后台分离）](#六认证与权限前后台分离)
+- [七、在线表格与在线文档](#七在线表格与在线文档)
+- **[八、部署步骤（三步走通）](#八部署步骤)**
+- **[八点五、环境变量全表（必填 / 可选 / 有什么用）](#八点五环境变量全表)**
+- [九、本地开发](#九本地开发)
+- [十、文件管理功能](#十文件管理功能)
+- [十一、160GB 文件夹 / 16K 长视频](#十一160gb-文件夹--16k-长视频会怎么跑)
+- [十二、12GB 电影能直接播吗 / Emby 能不能上 CF](#十二12gb-电影能直接播吗--emby-能不能上-cf)
+- [API 一览](#api-一览)
+- [权限全表（PERMISSIONS.md）](./PERMISSIONS.md)
 
 ---
 
@@ -502,6 +523,44 @@ curl -X DELETE -H "Authorization: Bearer $PAN_TOKEN" https://<域名>/api/dav/<i
 
 ## 八、部署步骤
 
+### 五步跑通（跟着抄）
+
+从零到能存文件，按这个顺序做，一步都别跳：
+
+```bash
+# ① 装依赖
+git clone https://github.com/zwzilee/cf-pan.git && cd cf-pan
+npm install
+
+# ② 登录 Cloudflare（浏览器弹窗授权，只需一次）
+npx wrangler login
+
+# ③ 建 D1 和 KV —— 命令会打印 id，抄下来
+npx wrangler d1 create pan_r2
+#   → database_id = "xxxxxxxx-xxxx-..."
+npx wrangler kv:namespace create PAN_R2_KV
+#   → id = "xxxxxxxxxxxxxxxx..."
+
+# ④ 把上面两个 id 填进 wrangler.toml 的 [[d1_databases]] 和 [[kv_namespaces]]
+#    （或用环境变量注入：D1_DATABASE_ID=... KV_NAMESPACE_ID=... npm run deploy:env）
+
+# ⑤ 建表 + 设密钥 + 部署
+npx wrangler d1 execute pan_r2 --file=schema.sql --remote
+npx wrangler secret put JWT_SECRET     # 粘一串长随机串，回车
+npx wrangler secret put MASTER_KEY     # 同上，另一个串（可选但强烈建议）
+npx wrangler deploy
+```
+
+部署成功会打印一个 `https://pan-r2.<你的子域>.workers.dev` 地址。打开它：
+
+1. **第一次登录**：如果 `wrangler.toml` 里 `BOOTSTRAP_ADMIN` 设了 `admin:你的密码`，就用它登录；没设的话先在控制台 Worker → Settings → Variables 加一条 `BOOTSTRAP_ADMIN=admin:你的密码`，再访问一次。登录后**把这条变量清空**。
+2. **加账号**：进后台「账号池」→ 新增，填一个 CF 账号的 R2 Access Key / Secret / Account ID / 桶名（怎么拿见文首第零章）。加够几个，顶部就显示「N 账号 / 总容量」。
+3. **设前台密码**：进「用户与密码」页，设一个读权限的访客密码 —— 之后把域名 + 这个密码发给朋友，他们只能只读浏览。
+4. **上传**：拖文件到页面就行。>25MB 自动分片，跨多个账号存。
+
+> 想确认部署没问题：`curl https://<你的域名>/api/health`，应回 `{"ok":true,...}`。
+
+
 ### 方式一：一键部署按钮（私库也能用）
 
 点 README 顶部的 **Deploy to Cloudflare** 按钮，会跳到 `dash.cloudflare.com` 的 Workers 创建页（`?to=/:account/workers-and-pages/create/deploy-to-workers&repository=...`），后面就是标准的「从 Git 导入」流程。
@@ -509,7 +568,7 @@ curl -X DELETE -H "Authorization: Bearer $PAN_TOKEN" https://<域名>/api/dav/<i
 **私库可以，前提是这三条：**
 
 1. 点按钮的是 **你自己**（有那个私库的访问权）。Cloudflare 是把仓库克隆进**你**的 GitHub 账号再构建，所以对你本人来说，私库和公库没区别。
-2. **Cloudflare Workers & Pages GitHub App 已安装并授权这个私库**：GitHub → Settings → Applications → Installed GitHub Apps → `Cloudflare Workers and Pages` → Configure → 在 Repository access 里把 `CF-R2PAN` 加进去。不装/没授权就会卡在 `Cloning repository… Failed: error occurred while fetching repository`。
+2. **Cloudflare Workers & Pages GitHub App 已安装并授权这个私库**：GitHub → Settings → Applications → Installed GitHub Apps → `Cloudflare Workers and Pages` → Configure → 在 Repository access 里把 `cf-pan` 加进去。不装/没授权就会卡在 `Cloning repository… Failed: error occurred while fetching repository`。
 3. `wrangler.toml` 里两个 id 已填真实值：`database_id`、`[[kv_namespaces]] id`。一键流程会**自动创建** D1/KV（它读 wrangler 配置来 provision），但占位符会让它判断不出要建什么，直接失败。所以要么先在本机跑一遍方式二的前两步拿到 id 再提交，要么把这两个字段删掉让它自己建（建完 Cloudflare 会把真实 id 写回它克隆出来的那份配置里）。
 
 > 官方文档写「Private repositories: Repositories must be public」——那说的是**别人**点你 README 上的按钮：他们拿不到你的私库，克隆必失败。你自己点自己的按钮不在这个限制里。这也是为什么它必须登录 `dash.cloudflare.com` 才能继续。参考 [Deploy to Cloudflare buttons 文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)、[GitHub 集成说明](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/)。
@@ -522,9 +581,9 @@ npx wrangler secret put JWT_SECRET
 npx wrangler secret put MASTER_KEY
 ```
 
-> 直接复制链接：`https://deploy.workers.cloudflare.com/?url=https://github.com/ikiiing/CF-R2PAN`
+> 直接复制链接：`https://deploy.workers.cloudflare.com/?url=https://github.com/zwzilee/cf-pan`
 >
-> 如果按钮在私库上还是报 `fetching repository` 失败，走等价的手动路径：`dash.cloudflare.com` → Workers & Pages → Create application → **Connect to Git** → GitHub → 选 `CF-R2PAN`（这条本来就支持私库，选仓库列表里能看到私库就说明 App 授权没问题）。
+> 如果按钮在私库上还是报 `fetching repository` 失败，走等价的手动路径：`dash.cloudflare.com` → Workers & Pages → Create application → **Connect to Git** → GitHub → 选 `cf-pan`（这条本来就支持私库，选仓库列表里能看到私库就说明 App 授权没问题）。
 
 ### 方式二：本地 wrangler 部署（推荐，能一次配全）
 
@@ -656,7 +715,7 @@ GitHub 有个**账号级**开关，关掉时所有仓库的 workflow 都不触�
 
 到 `github.com/settings` → 侧栏 **Actions → General**，确认允许 Actions（组织/企业账号还要看组织策略有没有禁）。没开时仓库 `Actions` 标签页会显示 "Workflows aren't being run on this repository"。
 
-> 实测记录：`ikiiing` 这个账号当前 Actions 被平台禁用（`GET /repos/.../actions/permissions/access` 返回 `access_level: "none"`，手动 dispatch 也回 422）。所以这套 workflow 现在**推上去不会触发**，得先在 GitHub 账号设置里把 Actions 打开；打开后 push 一次就会自动跑。
+> 如果你的 GitHub 账号 Actions 被平台禁用（`GET /repos/.../actions/permissions/access` 返回 `access_level: "none"`，手动 dispatch 回 422），这套 workflow 推上去不会触发，得先在 `github.com/settings` → Actions 里打开；打开后 push 一次就会自动跑。
 
 **第 3 步：验证**
 
@@ -667,7 +726,7 @@ GitHub 有个**账号级**开关，关掉时所有仓库的 workflow 都不触�
 如果 GitHub Actions 那条路走不通（比如账号被禁），换 Cloudflare 自己的 Git 集成，效果一样——push 就自动部署：
 
 1. `dash.cloudflare.com` → Workers & Pages → 点 `pan-r2` → **Settings → Builds → Connect**。
-2. 选 GitHub → 授权 `Cloudflare Workers and Pages` App（私库要在 App 的 Repository access 里勾上 `CF-R2PAN`）→ 选仓库、分支 `main`。
+2. 选 GitHub → 授权 `Cloudflare Workers and Pages` App（私库要在 App 的 Repository access 里勾上 `cf-pan`）→ 选仓库、分支 `main`。
 3. 构建命令留空（本项目无构建步骤，前端是单文件），部署命令填 `npx wrangler deploy`。
 4. 保存后 push 到 `main` 由 Cloudflare 自动构建部署，日志在 Worker 的 **Deployments / Builds** 里看。
 
@@ -735,6 +794,62 @@ CI 里就三行：
     KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
     BOOTSTRAP_ADMIN: ${{ secrets.BOOTSTRAP_ADMIN }}
 ```
+
+---
+
+## 八点五、环境变量全表
+
+这里是**所有**能影响运行行为的变量，分三类：**部署期绑定**（改不了运行时）、**必填密钥**、**可选开关**。每一行都写清楚「不填会怎样」。
+
+### 1. 部署期绑定（写在 \`wrangler.toml\`，不能用环境变量在运行时改）
+
+| 名字 | 类型 | 必填? | 作用 | 不填/写错会怎样 |
+|---|---|---|---|---|
+| \`DB\` | D1 binding | **必填** | 元数据库（用户、账号池、文件夹、文件、分片、回收站、标签…） | 部署时绑定校验失败，或运行时报 \`D1_ERROR\` |
+| \`KV\` | KV binding | **必填** | 分享短码、缩略图、settings、限流计数、加密盐 | 分享/缩略图全报错 |
+| \`ASSETS\` | Static Assets binding | 可选 | 托管 \`web/\` 前端；不绑定则只能用 API | 根路径 404，但 API 仍可用 |
+| \`database_id\` | uuid | **必填** | \`wrangler d1 create pan_r2\` 返回的 id | 部署报找不到库 |
+| \`id\`（KV） | 32位hex | **必填** | \`wrangler kv namespace create KV\` 返回的 id | 同上 |
+
+> 部署期绑定**只能**在部署前用脚本从环境变量注进 toml —— 见上一节「能不能用 CF 环境变量改掉 REPLACE_WITH_…？」。
+> \`npm run deploy:env\` 读 \`D1_DATABASE_ID\` / \`KV_NAMESPACE_ID\` 两个**构建期**环境变量，渲染出 \`.wrangler-deploy.toml\` 再部署。
+
+### 2. 必填密钥（用 \`wrangler secret put\` 设，不进仓库）
+
+| 名字 | 必填? | 作用 | 不填会怎样 |
+|---|---|---|---|
+| \`JWT_SECRET\` | **必填** | 后台登录态（cookie \`sid\`）的 HS256 签名密钥；\`PUBLIC_SECRET\` 未设时也兼作前台访客签名 | 登录 JWT 无法签名/校验，后台进不去 |
+| \`MASTER_KEY\` | 强烈建议 | 用 AES-GCM 加密账号池里的 \`secret_access_key\` 落库；不设则明文 base64（\`plain:base64\`）存 D1 | 能跑，但 D1 里账号密钥是明文，泄露即全桶沦陷 |
+| \`PUBLIC_SECRET\` | 可选 | 单独给前台访客凭证签名；不设时自动退回用 \`JWT_SECRET\` | 能跑；前后台共用同一个密钥 |
+
+> 三个都是 secret，**不要**写进 \`wrangler.toml\` 的 \`[vars]\`（会被提交进 git）。设法：
+> \`npx wrangler secret put JWT_SECRET\`（终端粘贴值回车）；CI 里用 \`echo "$SECRET" | npx wrangler secret put JWT_SECRET\`。
+
+### 3. 可选开关（\`[vars]\` 里，运行时 \`env\` 读）
+
+| 名字 | 默认 | 作用 | 说明 |
+|---|---|---|---|
+| \`BOOTSTRAP_ADMIN\` | 空 | 首次部署自动建管理员，格式 \`账号:密码\`（如 \`admin:MyPass123\`） | **建好后请清空**；只在该账号不存在时生效，不会覆盖已有密码 |
+| \`PUBLIC_APP_NAME\` | \`PAN R2\` | 页面标题/品牌名 | 纯展示 |
+| \`LOG_VISITS\` | \`1\`（开） | 访问日志开关，\`0\` 关 | 关掉后 \`/api/visits\` 不再记录新行 |
+| \`VISIT_KEEP_DAYS\` | \`15\` | 访问日志保留天数，定时任务超期清理 | 设 0/空则用默认 |
+| \`TRASH_KEEP_HOURS\` | \`24\` | 回收站保留小时数，过期自动真删 | 也可在 D1 \`settings\` 表里用 \`trash_keep_hours\` 覆盖（变量优先） |
+
+### 4. 构建期 / CI 环境变量（只在脚本和 Actions 里用，不进 Worker 运行时）
+
+| 名字 | 用在哪 | 作用 |
+|---|---|---|
+| \`CLOUDFLARE_API_TOKEN\` | \`wrangler deploy\` / CI | 部署令牌，权限见「八、部署步骤 → 方式三」 |
+| \`CLOUDFLARE_ACCOUNT_ID\` | \`wrangler deploy\` / CI | CF 账号 id |
+| \`D1_DATABASE_ID\` | \`npm run deploy:env\` | 渲染进 toml 的 \`database_id\` |
+| \`KV_NAMESPACE_ID\` | \`npm run deploy:env\` | 渲染进 toml 的 KV \`id\` |
+| \`CF_TOKEN\` / \`CF_ACCOUNT_ID\` / \`D1_ID\` | \`node scripts/d1-apply.mjs\` | 用 HTTP API 建表（CI/无 wrangler 环境） |
+
+### 一句话记忆
+
+- **数据库/缓存那两个 id** → 部署前注进 toml（\`npm run deploy:env\`），运行时改不了。
+- **三个 secret**（\`JWT_SECRET\` / \`MASTER_KEY\` / \`PUBLIC_SECRET\`）→ \`wrangler secret put\`，绝不进仓库。
+- **五个 vars**（\`BOOTSTRAP_ADMIN\` / \`PUBLIC_APP_NAME\` / \`LOG_VISITS\` / \`VISIT_KEEP_DAYS\` / \`TRASH_KEEP_HOURS\`）→ 写在 \`[vars]\`，可随时在控制台改。
 
 ---
 
