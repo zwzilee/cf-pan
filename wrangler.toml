@@ -53,7 +53,7 @@ queue = "tg-upload"
 max_batch_size = 1
 max_batch_timeout = 5
 max_concurrency = 2
-max_retries = 2
+max_retries = 5
 
 # 瀹氭椂娓呯悊璁块棶鏃ュ織锛氭瘡 15 澶╀竴娆★紙姣忔湀 1 鏃ュ拰 16 鏃?04:00 UTC锛?
 [triggers]

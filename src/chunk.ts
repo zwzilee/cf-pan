@@ -45,7 +45,7 @@ export async function sha256hex(body: ArrayBuffer): Promise<string> {
  */
 export async function putChunk(env: Env, uploadId: string, idx: number, body: ArrayBuffer) {
   const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
-  if (!up) throw new Error('上传会话不存在或已完成');
+  if (!up) return { ok: true, skipped: 'session-gone' }; // 会话已完成（并发重复批次），静默跳过
   if (idx < 0 || idx >= up.chunks_count) throw new Error(`分片越界: ${idx}/${up.chunks_count}`);
 
   const exist = await env.DB.prepare('SELECT id, etag FROM chunks WHERE file_id = ? AND idx = ?')

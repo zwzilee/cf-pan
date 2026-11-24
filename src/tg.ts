@@ -245,26 +245,29 @@ interface Picked {
   name: string;
   size: number;
   mime: string | null;
-}function pickFile(msg: any): Picked | null {
+  messageId?: number;
+}
+function pickFile(msg: any): Picked | null {
+  const mid = msg.message_id;
   if (msg.document) {
     const d = msg.document;
-    return { fileId: d.file_id, name: d.file_name || `document_${msg.message_id}`, size: d.file_size || 0, mime: d.mime_type || null };
+    return { fileId: d.file_id, name: d.file_name || `document_${msg.message_id}`, size: d.file_size || 0, mime: d.mime_type || null, messageId: mid };
   }
   if (msg.video) {
     const v = msg.video;
-    return { fileId: v.file_id, name: v.file_name || `video_${msg.message_id}.mp4`, size: v.file_size || 0, mime: v.mime_type || 'video/mp4' };
+    return { fileId: v.file_id, name: v.file_name || `video_${msg.message_id}.mp4`, size: v.file_size || 0, mime: v.mime_type || 'video/mp4', messageId: mid };
   }
   if (msg.audio) {
     const a = msg.audio;
-    return { fileId: a.file_id, name: a.file_name || `audio_${msg.message_id}.mp3`, size: a.file_size || 0, mime: a.mime_type || 'audio/mpeg' };
+    return { fileId: a.file_id, name: a.file_name || `audio_${msg.message_id}.mp3`, size: a.file_size || 0, mime: a.mime_type || 'audio/mpeg', messageId: mid };
   }
   if (msg.voice) {
     const v = msg.voice;
-    return { fileId: v.file_id, name: `voice_${msg.message_id}.ogg`, size: v.file_size || 0, mime: v.mime_type || 'audio/ogg' };
+    return { fileId: v.file_id, name: `voice_${msg.message_id}.ogg`, size: v.file_size || 0, mime: v.mime_type || 'audio/ogg', messageId: mid };
   }
   if (Array.isArray(msg.photo) && msg.photo.length) {
     const p = msg.photo[msg.photo.length - 1];
-    return { fileId: p.file_id, name: `photo_${msg.message_id}.jpg`, size: p.file_size || 0, mime: 'image/jpeg' };
+    return { fileId: p.file_id, name: `photo_${msg.message_id}.jpg`, size: p.file_size || 0, mime: 'image/jpeg', messageId: mid };
   }
   return null;
 }
@@ -403,7 +406,15 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
   }
 
   // 建一条进度任务，面板能实时看到 queued → downloading → uploading → done
-  const jobId = await createJob(env, chatId, picked.name, picked.size || 0).catch(() => '');
+  // 若同 chat+同名+同大小还有一个未完成的 job（续传场景），复用它，避免面板出现一堆重复格子
+  let jobId = '';
+  try {
+    const existJob = await env.DB.prepare(
+      `SELECT id FROM tg_jobs WHERE chat_id=? AND name=? AND size=? AND phase IN ('queued','downloading','uploading','completing') ORDER BY created_at DESC LIMIT 1`,
+    ).bind(chatId, picked.name, picked.size || 0).first<any>();
+    if (existJob?.id) jobId = String(existJob.id);
+  } catch { /* ignore */ }
+  if (!jobId) jobId = await createJob(env, chatId, picked.name, picked.size || 0).catch(() => '');
 
   const folderLabel = async (): Promise<string> => {
     const fid = await ensureChatFolder(env, chan.folder_id, chatId);
@@ -508,6 +519,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
     } else {
       up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
     }
+    // ★ 续传批次要带 messageId，供完成后清理 TG 本地缓存
     const total = Math.max(1, Math.ceil(size / chunkSize));
     if (jobId)
       await updateJob(env, jobId, {
@@ -648,8 +660,9 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
   const baseHeaders: Record<string, string> = {};
   if (m.fileBase && m.fileSecret) baseHeaders['X-Tgfile-Secret'] = m.fileSecret;
 
-  // 幂等：跳过已上传的片
-  let job = m.jobId ? await env.DB.prepare('SELECT * FROM tg_jobs WHERE id = ?').bind(m.jobId).first<any>() : null;
+  // 会话已被别的批次完成/清掉 → 这一批是重复投递，直接跳过（避免退出码噪音）
+  const sess = await env.DB.prepare('SELECT id FROM uploads WHERE id = ?').bind(m.uploadId).first<any>();
+  if (!sess) return;
 
   for (let i = m.from; i <= m.to; i++) {
     const s = i * m.chunkSize;
@@ -703,9 +716,25 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
     throw new Error(`分片不齐：${have}/${m.total}`);
   }
 
-  // 片齐了：完成合并 + 回执
-  const done = await completeUpload(env, m.uploadId);
+  // 片齐了：完成合并 + 回执（用作业对象锁，防多批次并发重复 complete）
+  let done: { fileId: string } | null = null;
+  if (m.jobId) {
+    const claim = await env.DB.prepare(
+      `UPDATE tg_jobs SET phase='completing', updated_at=? WHERE id=? AND phase IN ('downloading','uploading')`,
+    ).bind(new Date().toISOString(), m.jobId).run();
+    if (!claim.meta.changes) return; // 已被别的批次抢先完成/正在完成
+  }
+  try {
+    done = await completeUpload(env, m.uploadId);
+  } catch (e: any) {
+    if (m.jobId) await updateJob(env, m.jobId, { phase: 'done' }).catch(() => {}); // 会话已被并发批次完成
+    return;
+  }
   if (m.jobId) await updateJob(env, m.jobId, { phase: 'done', chunks_done: m.total, bytes_done: m.size, file_id: done.fileId }).catch(() => {});
+  // 把同一 upload_id 的其它重复 job 一并收尾，避免面板留多条僵尸
+  await env.DB.prepare(`UPDATE tg_jobs SET phase='done', chunks_done=?, bytes_done=?, file_id=?, updated_at=? WHERE upload_id=? AND id<>? AND phase<>'done'`)
+    .bind(m.total, m.size, done.fileId, new Date().toISOString(), m.uploadId, m.jobId || '')
+    .run().catch(() => {});
   await setSetting(env, 'tg_last_at', new Date().toISOString());
   await env.DB.prepare('UPDATE tg_channels SET last_at = ? WHERE id = ?').bind(new Date().toISOString(), m.chanId).run().catch(() => {});
   const dir = m.chatId + '（目录 #' + (m.folderId == null ? 'root' : m.folderId) + '）';
@@ -776,6 +805,19 @@ export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean;
   }
   await updateJob(env, jobId, { phase: 'uploading', chunks_done: have.size, chunks_total: total }).catch(() => {});
   return { ok: true, missing: missing.length, batches: ranges.length };
+}
+
+/**
+ * 看门狗：延时到达后扫描某 chat 未完成的 job（phase in downloading/uploading 且 chunks 不齐），
+ * 自动补发缺失片。实现「失败/停滞自愈」，用户不需要手动点续传。
+ */
+export async function watchdogResume(env: Env, chatId: string): Promise<void> {
+  const jobs = await env.DB.prepare(
+    `SELECT id FROM tg_jobs WHERE chat_id = ? AND phase IN ('downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
+  ).bind(chatId).all<any>();
+  for (const j of (jobs.results || []) as any[]) {
+    await resumeJob(env, String(j.id)).catch(() => {});
+  }
 }
 
 export interface TgChannel {

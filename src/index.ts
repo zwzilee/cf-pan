@@ -22,6 +22,7 @@ import {
   handleTgUpdate,
   processChunkBatch,
   resumeJob,
+  watchdogResume,
   tgApi,
   listChannels,
   createChannel,
@@ -144,6 +145,17 @@ export default {
   async queue(batch: MessageBatch<{ update?: any; kind?: string }>, env: Env): Promise<void> {
     for (const msg of batch.messages) {
       const body: any = msg.body || {};
+      // 看门狗：延时到达，扫描该 chat 未完成 job，自动补发缺片（失败自愈，无需人工）
+      if (body.kind === 'watchdog') {
+        try {
+          await watchdogResume(env, String(body.chatId));
+          msg.ack();
+        } catch (e: any) {
+          console.log('watchdog err: ' + (e?.message || e));
+          msg.ack();
+        }
+        continue;
+      }
       // 分片批次消息：跨多次 invocation，避开免费计划单次 50 subrequest 上限
       if (body.kind === 'chunk-batch') {
         try {
@@ -1622,9 +1634,13 @@ async function tgWebhook(req: Request, env: Env, secret: string, ctx?: Execution
   }
   // 大文件（视频/压缩包，可达 2GB）下载+入库远超 waitUntil 的 30s 上限，
   // 所以统一丢进 Queue，consumer 里最长可跑 15 分钟。webhook 立刻返回 200。
+  // 每条 update 都带一条 watchdog 延时消息：若 3 分钟内主任务还没跑完，自动补发缺失片（无需人工点续传）。
   if (env.TG_QUEUE) {
     try {
+      const msg = (update as any)?.message || (update as any)?.channel_post;
+      const cid = msg?.chat?.id;
       await env.TG_QUEUE.send({ update });
+      if (cid) await env.TG_QUEUE.send({ kind: 'watchdog', chatId: String(cid) }, { delaySeconds: 180 });
       return json({ ok: true, queued: true });
     } catch (e: any) {
       // 队列不可用时退回同步后台处理
