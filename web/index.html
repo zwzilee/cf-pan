@@ -2282,6 +2282,7 @@ let tgView = 'list';
 let tgProgTimer = null;
 async function renderTelegram() {
   if (tgProgTimer) { clearInterval(tgProgTimer); tgProgTimer = null; }
+  if (tgMiniTimer) { clearInterval(tgMiniTimer); tgMiniTimer = null; }
   const d = await api('/api/tg/config');
   tgCfg = d.config;
   if (tgView === 'settings') return renderTgSettings();
@@ -2316,9 +2317,10 @@ async function renderTelegram() {
   $('#view').innerHTML = `
     <div class="page-h"><h2>TG 上传</h2><span class="sub">每个通道 = 一个落盘目录 + 一份白名单；给机器人发文件自动存进来</span>
       <div class="spacer"></div>
-      <button class="btn" onclick="tgNewFolder()">＋ 新建 TG 文件夹</button>
-      <button class="btn ghost" onclick="tgView='progress';renderTelegram()">📊 进度</button>
+      <button class="btn" onclick="tgView='progress';renderTelegram()">📊 入库进度</button>
       <button class="btn ghost" onclick="tgView='settings';renderTelegram()">⚙️ 设置</button></div>
+
+    <div id="tgMini" class="card" style="padding:13px 16px;margin-bottom:14px;display:none"></div>
 
     <div class="card" style="padding:18px;margin-bottom:14px">
       <div class="row" style="justify-content:space-between;margin-bottom:10px"><b>新建通道</b>
@@ -2327,6 +2329,7 @@ async function renderTelegram() {
         <div class="field" style="flex:1;min-width:170px;margin:0"><label>TG 用户名</label><input id="tcUser" class="input mono" placeholder="例如 @dongdong_bot"></div>
         <div class="field" style="flex:1;min-width:170px;margin:0"><label>上传目录</label><select id="tcFolder" class="input">${fopts}</select></div>
         <button class="btn primary" onclick="tgCreateChannel()">创建</button>
+        <button class="btn ghost" onclick="tgNewFolder()">＋ 新建文件夹</button>
       </div>
       <div class="field" style="margin-top:10px"><label>白名单 Chat ID（逗号分隔，留空 = 谁都不收）</label>
         <input id="tcAllowed" class="input mono" placeholder="123456789, -1001234567890"></div>
@@ -2337,6 +2340,36 @@ async function renderTelegram() {
       <table class="tb"><thead><tr><th>TG 用户名</th><th>上传目录</th><th>白名单</th><th>状态</th><th>最后收到</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody></table>
     </div>`;
+  tgMiniLoad();
+}
+let tgMiniTimer = null;
+async function tgMiniLoad() {
+  if (tgMiniTimer) { clearInterval(tgMiniTimer); tgMiniTimer = null; }
+  const paint = async () => {
+    if (tgView !== 'list' || !document.getElementById('tgMini')) { if (tgMiniTimer) { clearInterval(tgMiniTimer); tgMiniTimer = null; } return; }
+    try {
+      const d = await api('/api/tg/progress');
+      const st = d.stats || {}, jobs = d.jobs || [];
+      const running = jobs.filter((j) => j.phase === 'downloading' || j.phase === 'uploading');
+      const queued = jobs.filter((j) => j.phase === 'queued');
+      const box = document.getElementById('tgMini');
+      if (!box) return;
+      const busy = running.length + queued.length;
+      if (!busy && !st.total) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      const top = running[0];
+      const pct = top && top.size ? Math.min(100, Math.round((top.bytes_done / top.size) * 100)) : 0;
+      box.innerHTML = `<div class="row" style="justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <div class="nm" style="gap:10px;min-width:0"><span class="ico">${busy ? '⬇️' : '✅'}</span>
+          <div class="t"><b>${busy ? (top ? esc(top.name) : '排队中…') : '当前没有进行中的任务'}</b>
+          <small>${busy ? `${tgPhaseLabel(top ? top.phase : 'queued')}${top ? ` · ${pct}% · ${bytes(top.bytes_done)} / ${bytes(top.size)}` : ''}${queued.length ? ` · 另 ${queued.length} 个排队` : ''}` : `已完成 ${st.done}/${st.total} 个 · 累计 ${bytes(st.bytesDone)}`}</small></div></div>
+        <div class="row" style="gap:12px;align-items:center">
+          ${busy ? `<div style="width:180px;height:6px;border-radius:99px;background:#0b101a;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .5s"></i></div>` : ''}
+          <button class="btn ghost sm" onclick="tgView='progress';renderTelegram()">查看全部</button></div></div>`;
+    } catch (e) { /* ignore */ }
+  };
+  await paint();
+  tgMiniTimer = setInterval(paint, 4000);
 }
 async function tgCreateChannel() {
   const username = ($('#tcUser').value || '').trim();
@@ -2436,48 +2469,57 @@ function tgPhasePill(p) {
   return '<span class="pill warn">' + (p === 'downloading' ? '下载中' : '入库中') + '</span>';
 }
 function tgDrawProgress(stats, jobs) {
-  const active = (jobs || []).filter((j) => j.phase === 'downloading' || j.phase === 'uploading' || j.phase === 'queued');
+  const running = (jobs || []).filter((j) => j.phase === 'downloading' || j.phase === 'uploading');
+  const queued = (jobs || []).filter((j) => j.phase === 'queued');
+  const active = running.concat(queued);
+  const pctOf = (j) => (j.size ? Math.min(100, Math.round((Number(j.bytes_done || 0) / j.size) * 100)) : 0);
+  const totalPct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
   const activeHtml = active.length
     ? active.map((j) => {
-        const pct = j.size ? Math.min(100, Math.round((j.bytes_done / j.size) * 100)) : 0;
-        return `<div class="dl-row" style="grid-template-columns:1fr;gap:8px">
-          <div class="row" style="justify-content:space-between;gap:10px">
-            <div style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.name)}</b>
-              <span class="mut" style="font-size:12px">${tgPhaseLabel(j.phase)} · ${j.chunks_done}/${j.chunks_total} 片 · ${bytes(j.bytes_done)} / ${bytes(j.size)}</span></div>
-            <div style="font-weight:650;font-size:15px">${pct}%</div></div>
-          <div style="height:6px;border-radius:99px;background:#0b101a;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .4s"></i></div>
+        const pct = pctOf(j);
+        const isQueued = j.phase === 'queued';
+        return `<div class="dl-row" style="grid-template-columns:1fr;gap:9px">
+          <div class="row" style="justify-content:space-between;gap:10px;align-items:center">
+            <div class="nm" style="gap:10px"><span class="ico">${isQueued ? '🕒' : '⬇️'}</span>
+              <div class="t"><b>${esc(j.name)}</b>
+              <small>${tgPhaseLabel(j.phase)}${isQueued ? '' : ` · ${j.chunks_done}/${j.chunks_total} 片 · ${bytes(j.bytes_done)} / ${bytes(j.size)}`}</small></div></div>
+            <div style="font-weight:650;font-size:15px;min-width:44px;text-align:right">${isQueued ? '排队' : pct + '%'}</div></div>
+          <div style="height:6px;border-radius:99px;background:#0b101a;overflow:hidden">
+            <i style="display:block;height:100%;width:${isQueued ? 4 : pct}%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .5s"></i></div>
         </div>`;
       }).join('')
-    : '<div class="dl-row" style="grid-template-columns:1fr"><span class="mut">当前没有进行中的任务。</span></div>';
+    : '<div class="dl-row" style="grid-template-columns:1fr"><span class="mut" style="padding:4px 0">当前没有进行中的任务。</span></div>';
   const rows = (jobs || []).length
     ? jobs.map((j) => {
-        const canResume = (j.phase === 'failed' || j.phase === 'uploading') && j.chunks_done < j.chunks_total;
+        const canResume = (j.phase === 'failed') && j.chunks_done < j.chunks_total;
         const act = canResume
-          ? `<td><button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="tgResumeJob('${j.id}',this)">续传</button></td>`
+          ? `<td style="text-align:right"><button class="btn ghost sm" onclick="tgResumeJob('${j.id}',this)">续传</button></td>`
           : '<td></td>';
         return `<tr>
-        <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.name)}</td>
+        <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.name)}</td>
         <td>${tgPhasePill(j.phase)}</td>
         <td class="mut">${bytes(j.size)}</td>
         <td class="mut">${j.chunks_done}/${j.chunks_total}</td>
-        <td class="mut">${when(j.created_at)}</td>${act}</tr>`;
+        <td class="mut">${when(j.updated_at || j.created_at)}</td>${act}</tr>`;
       }).join('')
     : '<tr><td colspan="6" class="mut">还没有记录。给机器人发个文件就会出现。</td></tr>';
   return `
     <div class="stats">
       <div class="stat"><div class="k">排队中</div><div class="v">${stats.queued}</div></div>
       <div class="stat"><div class="k">进行中</div><div class="v">${stats.active}</div></div>
-      <div class="stat"><div class="k">已完成</div><div class="v">${stats.done}</div></div>
+      <div class="stat"><div class="k">已完成</div><div class="v">${stats.done}<small>/ ${stats.total} 个文件</small></div>
+        <div class="bar"><i style="width:${totalPct}%"></i></div></div>
       <div class="stat"><div class="k">失败</div><div class="v">${stats.failed}</div></div>
-      <div class="stat"><div class="k">累计入库</div><div class="v">${bytes(stats.bytesDone)}</div></div>
+      <div class="stat"><div class="k">累计入库</div><div class="v">${bytes(stats.bytesDone)}</div>
+        <div class="k" style="margin:8px 0 0">仅统计已完成文件的实际大小</div></div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
-      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>进行中</b> <span class="mut">· ${active.length} 个</span></div>
+      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>进行中</b> <span class="mut">· ${running.length} 个下载/入库${queued.length ? `，${queued.length} 个排队` : ''}</span></div>
       ${activeHtml}
     </div>
     <div class="card" style="padding:0;overflow:hidden">
-      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>历史</b> <span class="mut">· 最近 ${(jobs || []).length} 条</span></div>
-      <table class="tb"><thead><tr><th>文件名</th><th>状态</th><th>大小</th><th>分片</th><th>时间</th><th></th></tr></thead>
+      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>历史</b> <span class="mut">· 每个文件一条（重试/续传已合并）· 最近 ${(jobs || []).length} 条</span></div>
+      <table class="tb"><thead><tr><th>文件名</th><th>状态</th><th>大小</th><th>分片</th><th>更新时间</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>
     </div>`;
 }

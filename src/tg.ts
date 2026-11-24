@@ -219,16 +219,33 @@ export async function updateJob(env: Env, id: string, patch: Partial<TgJob>): Pr
 }
 
 export async function listJobs(env: Env, limit = 50): Promise<TgJob[]> {
-  const r = await env.DB.prepare('SELECT * FROM tg_jobs ORDER BY created_at DESC LIMIT ?').bind(limit).all<any>();
+  // 同一个文件（chat_id+name+size）多次重试/续传只会产生多条 job 行；
+  // 这里按「每个文件只保留最近一条」去重，历史表格不再出现重复格子。
+  const r = await env.DB.prepare(
+    `SELECT * FROM tg_jobs t
+     WHERE t.created_at = (
+       SELECT MAX(x.created_at) FROM tg_jobs x
+       WHERE x.chat_id = t.chat_id AND x.name = t.name AND x.size = t.size
+     )
+     ORDER BY t.created_at DESC LIMIT ?`,
+  ).bind(limit).all<any>();
   return (r.results || []) as TgJob[];
 }
 
 export async function jobStats(env: Env): Promise<{ queued: number; active: number; done: number; failed: number; total: number; bytesDone: number }> {
-  const rows = await env.DB.prepare('SELECT phase, COUNT(*) c, SUM(bytes_done) b FROM tg_jobs GROUP BY phase').all<any>();
+  // 统计同样按「每个文件一条」去重，避免重试/续传把计数和累计入库撑虚。
+  const rows = await env.DB.prepare(
+    `SELECT t.phase, t.size, t.bytes_done FROM tg_jobs t
+     WHERE t.created_at = (
+       SELECT MAX(x.created_at) FROM tg_jobs x
+       WHERE x.chat_id = t.chat_id AND x.name = t.name AND x.size = t.size
+     )`,
+  ).all<any>();
   const rs = (rows.results || []) as any[];
-  const g = (p: string) => Number((rs.find((x) => x.phase === p) || {}).c || 0);
-  const total = rs.reduce((a, x) => a + Number(x.c || 0), 0);
-  const bytesDone = rs.reduce((a, x) => a + Number(x.b || 0), 0);
+  const g = (p: string) => rs.filter((x) => x.phase === p).length;
+  const total = rs.length;
+  // 累计入库 = 所有已完成文件的真实大小之和（bytes_done 在 done 时不一定是整个文件，用 size 更准）
+  const bytesDone = rs.filter((x) => x.phase === 'done').reduce((a, x) => a + Number(x.size || 0), 0);
   return {
     queued: g('queued'),
     active: g('downloading') + g('uploading'),
