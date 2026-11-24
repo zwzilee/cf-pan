@@ -1671,7 +1671,13 @@ async function tgWebhook(req: Request, env: Env, secret: string, ctx?: Execution
       const msg = (update as any)?.message || (update as any)?.channel_post;
       const cid = msg?.chat?.id;
       await env.TG_QUEUE.send({ update });
-      if (cid) await env.TG_QUEUE.send({ kind: 'watchdog', chatId: String(cid) }, { delaySeconds: 180 });
+      if (cid) {
+        // 3 分钟后自愈补片
+        await env.TG_QUEUE.send({ kind: 'watchdog', chatId: String(cid) }, { delaySeconds: 180 });
+        // 再来两道定时自愈：防止任务静默卡在 queued/downloading（例如入队后 consumer 抖动没跑）
+        await env.TG_QUEUE.send({ kind: 'watchdog', chatId: String(cid) }, { delaySeconds: 600 });
+        await env.TG_QUEUE.send({ kind: 'watchdog', chatId: String(cid) }, { delaySeconds: 1800 });
+      }
       return json({ ok: true, queued: true });
     } catch (e: any) {
       // 队列不可用时退回同步后台处理

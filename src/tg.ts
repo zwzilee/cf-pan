@@ -807,8 +807,14 @@ export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean;
   if (!job) return { ok: false, missing: 0, batches: 0, error: 'job 不存在' };
   if (job.phase === 'done') return { ok: true, missing: 0, batches: 0, done: true };
   const uploadId = job.upload_id;
-  if (!uploadId) return { ok: false, missing: 0, batches: 0, error: '该 job 未建立上传会话（还没下载阶段）' };
   const dlUrl = job.dl_url;
+  // 卡在 queued 且从未建成上传会话（入队即失败、或旧数据残缺）：无法续传，直接标记失败让面板说实话，
+  // 用户重发该文件时 handleTgUpdate 会走全新一轮。
+  if (!uploadId && (job.phase === 'queued' || job.phase === 'downloading')) {
+    await updateJob(env, jobId, { phase: 'failed', error: '未能建立上传会话（未收到可下载的文件），请重新发送该文件' }).catch(() => {});
+    return { ok: false, missing: 0, batches: 0, error: '未建立上传会话，已标记失败' };
+  }
+  if (!uploadId) return { ok: false, missing: 0, batches: 0, error: '该 job 未建立上传会话（还没下载阶段）' };
   if (!dlUrl) return { ok: false, missing: 0, batches: 0, error: '该 job 未记录下载地址（旧版本任务无法续传）' };
 
   const up = await env.DB.prepare('SELECT chunk_size, chunks_count, folder_id FROM uploads WHERE id = ?').bind(uploadId).first<any>();
@@ -867,7 +873,7 @@ export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean;
  */
 export async function watchdogResume(env: Env, chatId: string): Promise<void> {
   const jobs = await env.DB.prepare(
-    `SELECT id FROM tg_jobs WHERE chat_id = ? AND phase IN ('downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
+    `SELECT id FROM tg_jobs WHERE chat_id = ? AND phase IN ('queued','downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
   ).bind(chatId).all<any>();
   for (const j of (jobs.results || []) as any[]) {
     await resumeJob(env, String(j.id)).catch(() => {});
