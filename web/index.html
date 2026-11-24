@@ -19,8 +19,8 @@ body{margin:0;background:var(--bg);color:var(--fg);
   -webkit-font-smoothing:antialiased}
 a{color:var(--acc);text-decoration:none}
 button,input,select,textarea{font:inherit;color:inherit}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:#263145;border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar{width:0;height:0}
+::-webkit-scrollbar-thumb{background:transparent}
 ::-webkit-scrollbar-thumb:hover{background:#33415c}
 ::-webkit-scrollbar-track{background:transparent}
 
@@ -96,7 +96,7 @@ input::placeholder,textarea::placeholder{color:#5c6a82}
 /* ---------- 外壳 ---------- */
 /* 全景背景：固定铺满窗口，随窗口缩放自动缩放（始终 cover 铺满，不变形） */
 body::before{content:"";position:fixed;inset:0;z-index:-2;
-  background-image:url("/__bg/140408423.jpg");
+  background-image:var(--pan-bg-url, url("/__bg/140408423.jpg"));
   background-position:center;background-repeat:no-repeat;background-size:cover;
   background-color:#0a0d13}
 /* 半透明遮罩，保证文字可读；主题色透出来 */
@@ -114,7 +114,7 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 .nav .grp{color:var(--mut2);font-size:10.5px;letter-spacing:1.4px;padding:14px 10px 6px;text-transform:uppercase}
 .nav a{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;color:var(--mut);font-size:13px;cursor:pointer}
 .nav a:hover{background:rgba(30,58,110,.05);color:var(--fg)}
-.nav a.on{background:linear-gradient(90deg,#1b2a47,#151d2e);color:#fff;box-shadow:inset 2px 0 0 var(--acc)}
+.nav a.on{background:rgba(30,58,110,.05);color:#fff;box-shadow:inset 2px 0 0 var(--acc)}
 .nav a .ic{width:18px;text-align:center;font-size:14px}
 .side-foot{padding:12px;border-top:1px solid var(--line);font-size:12px}
 /* 总空间可视化（环形 + 进度条 + 账号数），前台后台都有 */
@@ -138,8 +138,11 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 .acc-sum .info .big{font-size:19px;font-weight:650;margin-bottom:4px}
 .acc-sum .info .sub{font-size:12px;color:var(--mut);margin-bottom:10px}
 .acc-sum .sbar{height:8px;border-radius:99px;background:#0b101a;overflow:hidden}
-.acc-sum .sbar i{display:block;height:100%;background:linear-gradient(90deg,#3f7bf0,#6ea1ff)}
+.acc-sum .sbar i{display:block;height:100%;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .4s,background .4s}
 .acc-sum .sbar i.hot{background:linear-gradient(90deg,#f5a524,#ff7a45)}
+.sbar i.lv-ok,table .sbar i.lv-ok{background:linear-gradient(90deg,#22c55e,#4ade80)!important}
+.sbar i.lv-warn,table .sbar i.lv-warn{background:linear-gradient(90deg,#f5a524,#ffcc55)!important}
+.sbar i.lv-hot,table .sbar i.lv-hot{background:linear-gradient(90deg,#ef4444,#ff7a7a)!important}
 .me{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;background:rgba(18,24,38,.003)}
 .avatar{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-size:12px;font-weight:700;
   background:linear-gradient(140deg,#37528c,#22304d);color:#cfe0ff}
@@ -163,6 +166,9 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 .stat .v small{font-size:12px;color:var(--mut);font-weight:400;margin-left:3px}
 .stat .bar{height:5px;border-radius:99px;background:#0b101a;margin-top:10px;overflow:hidden}
 .stat .bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff)}
+.stat .bar i.lv-ok{background:linear-gradient(90deg,#22c55e,#4ade80)}
+.stat .bar i.lv-warn{background:linear-gradient(90deg,#f5a524,#ffcc55)}
+.stat .bar i.lv-hot{background:linear-gradient(90deg,#ef4444,#ff7a7a)}
 
 /* ---------- 列表 ---------- */
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
@@ -186,7 +192,7 @@ table.tb td{padding:11px 14px;border-bottom:1px solid #1a2233;vertical-align:mid
 table.tb tr:hover td{background:rgba(30,58,110,.05)}
 .mini-bar{width:90px;height:6px;border-radius:99px;background:#0b101a;overflow:hidden;display:inline-block;vertical-align:middle}
 .mini-bar i{display:block;height:100%;background:linear-gradient(90deg,#2ec27e,#5fe0a8)}
-.mini-bar i.hot{background:linear-gradient(90deg,#f5a524,#ff7a45)}
+.mini-bar i.lv-ok{background:linear-gradient(90deg,#22c55e,#4ade80)}.mini-bar i.lv-warn{background:linear-gradient(90deg,#f5a524,#ffcc55)}.mini-bar i.lv-hot{background:linear-gradient(90deg,#ef4444,#ff7a7a)}
 
 /* ---------- 上传 ---------- */
 .drop{border:1.5px dashed #2b3a55;border-radius:var(--r);padding:26px;text-align:center;color:var(--mut);
@@ -480,6 +486,8 @@ async function boot() {
   const pill = $('#topPill');
   pill.textContent = me.user.kind === 'admin' ? '管理员' : '前台 · 只读';
   pill.className = 'pill ' + (me.user.kind === 'admin' ? 'ok' : 'acc');
+  // 载入外观（头像 / 品牌 / 背景）
+  try { state.appearance = await api('/api/appearance'); applyAppearance(); } catch { state.appearance = {}; }
   renderNav();
   refreshStorage();
   await go('files');
@@ -577,7 +585,7 @@ function statsHtml(s) {
     <div class="stat"><div class="k">🔑 账号</div><div class="v">${s.accounts}<small>个</small></div>
       <div class="mut" style="margin-top:4px">合计 ${bytes(s.capacity)}</div></div>
     <div class="stat"><div class="k">💾 已用</div><div class="v">${bytes(s.used)}</div>
-      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="bar"><i class="${lvlClass(pct)}" style="width:${pct}%"></i></div>
       <div class="mut" style="margin-top:6px">${pct.toFixed(1)}% 已占用</div></div>
     <div class="stat"><div class="k">♻️ 去重省下</div><div class="v">${bytes(saved)}</div>
       <div class="mut" style="margin-top:4px">${s.blobs ?? 0} 个内容块 · ${saved ? '重复文件不再占空间' : '还没有重复内容'}</div></div>
@@ -594,6 +602,9 @@ function ringSvg(pct, size = 46, sw = 4, color = '#4f8cff') {
     <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
       stroke-linecap="round" stroke-dasharray="${on} ${c}"/></svg>`;
 }
+// 电池式分级：<60% 绿 / 60~85% 黄 / >85% 红
+function lvlClass(pct) { return pct > 85 ? 'lv-hot' : pct >= 60 ? 'lv-warn' : 'lv-ok'; }
+function lvlColor(pct) { return pct > 85 ? '#ef4444' : pct >= 60 ? '#f5a524' : '#22c55e'; }
 function pctText(pct, used) {
   if (!used) return '0%';
   if (pct < 1) return '<1%';
@@ -616,11 +627,10 @@ async function refreshStorage() {
     return;
   }
   box.innerHTML = `<div class="srow">
-      <div class="ring">${ringSvg(pct)}<div class="pct">${pctText(pct, used)}</div></div>
+      <div class="ring">${ringSvg(pct, 46, 4, lvlColor(pct))}<div class="pct">${pctText(pct, used)}</div></div>
       <div class="stxt"><div class="u">${bytes(used)} / ${bytes(cap)}</div>
         <div class="s">${s.accounts} 个账号 · ${s.files} 个文件${s.dedupSaved ? ` · 去重省 ${bytes(s.dedupSaved)}` : ''}</div></div>
-    </div>
-    <div class="sbar"><i class="${hot}" style="width:${Math.max(cap ? pct : 0, used ? 0.8 : 0)}%"></i></div>`;
+    </div>`;
 }
 
 /* ---------- 文件 ---------- */
@@ -1902,11 +1912,11 @@ async function renderAccounts() {
   let html = `<div class="page-h"><h2>R2 账号池</h2><span class="sub">${accounts.length} 个账号，分片自动选最空的落盘</span>
     <div class="spacer"></div><button class="btn sm primary" onclick="accountForm()">＋ 添加账号</button></div>`;
   html += `<div class="card acc-sum">
-      <div class="ring">${ringSvg(totalPct, 96, 9, totalPct > 85 ? '#ff7a45' : '#4f8cff')}<div class="pct">${pctText(totalPct, totalUsed)}</div></div>
+      <div class="ring">${ringSvg(totalPct, 96, 9, lvlColor(totalPct))}<div class="pct">${pctText(totalPct, totalUsed)}</div></div>
       <div class="info">
         <div class="big">${accounts.length ? bytes(totalUsed) + ' / ' + bytes(totalCap) : '还没添加账号'}</div>
         <div class="sub">${accounts.length ? `${accounts.length} 个账号（启用 ${enabledN}）· 剩余 ${bytes(Math.max(0, totalCap - totalUsed))}` : '加一个 R2 账号后，这里会显示总空间与用量'}</div>
-        <div class="sbar"><i class="${totalPct > 85 ? 'hot' : ''}" style="width:${Math.max(totalPct, totalUsed ? 0.8 : 0)}%"></i></div>
+        <div class="sbar"><i class="${lvlClass(totalPct)}" style="width:${Math.max(totalPct, totalUsed ? 0.8 : 0)}%"></i></div>
       </div>
     </div>`;
   html += `<div id="accForm"></div>`;
@@ -1921,7 +1931,7 @@ async function renderAccounts() {
         <td><b>${esc(a.name)}</b></td>
         <td class="mono">${esc(a.bucket)}</td>
         <td class="mono" style="color:var(--mut)">${esc(a.account_id.slice(0, 8))}…</td>
-        <td><div class="mini-bar"><i class="${pct > 85 ? 'hot' : ''}" style="width:${pct}%"></i></div>
+        <td><div class="mini-bar"><i class="${lvlClass(pct)}" style="width:${pct}%"></i></div>
           <div class="mut" style="margin-top:4px">${bytes(a.used_bytes)} / ${bytes(a.capacity_bytes)}</div></td>
         <td>${a.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill">停用</span>'}</td>
         <td style="text-align:right;white-space:nowrap">
@@ -2154,7 +2164,54 @@ async function renderAccount() {
         <span class="pill ${lk?.ip?.locked ? 'err' : 'ok'}">IP：${lk?.ip?.fails || 0} / ${lk?.maxIp || 100} 次</span>
       </div>
       <div class="mut" style="margin-top:8px">失败达上限锁 10 分钟。账号 5 次就锁，同一 IP 累计 100 次才锁（共享出口不误伤）。</div>
+    </div>
+    <div class="card" style="padding:18px;max-width:520px">
+      <div class="mut" style="margin-bottom:12px">外观 · 头像与背景</div>
+      <div class="row" style="gap:12px;margin-bottom:14px">
+        <div class="avatar" id="apAv" style="width:48px;height:48px;font-size:16px;background-size:cover;background-position:center">${esc((state.user?.name || '?').slice(0, 1).toUpperCase())}</div>
+        <div class="mut" style="font-size:12px">当前头像预览</div>
+      </div>
+      <div class="field"><label>头像图片 URL（留空 = 用名字首字母）</label><input id="apAvUrl" class="input" placeholder="https://… 或 data:image/…" oninput="document.getElementById('apAv').style.backgroundImage=this.value?('url('+JSON.stringify(this.value).slice(1,-1)+')'):'none'"></div>
+      <div class="field"><label>背景图片 URL（留空 = 默认渐变；填了自动抓取铺满全景背景）</label><input id="apBgUrl" class="input" placeholder="https://… 或 data:image/…"></div>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1;margin:0"><label>品牌标题</label><input id="apTitle" class="input" placeholder="东东的R2盘"></div>
+        <div class="field" style="flex:1;margin:0"><label>副标题</label><input id="apSub" class="input" placeholder="AGGREGATE DRIVE"></div>
+      </div>
+      <button class="btn primary" style="margin-top:14px" onclick="saveAppearance()">保存外观</button>
     </div>`;
+  // 回填当前外观
+  api('/api/appearance').then((ap) => {
+    if (!ap) return;
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v || ''; };
+    set('apAvUrl', ap.avatarUrl); set('apBgUrl', ap.bgUrl); set('apTitle', ap.brandTitle); set('apSub', ap.brandSub);
+    if (ap.avatarUrl) { const av = document.getElementById('apAv'); if (av) { av.style.backgroundImage = `url(${JSON.stringify(ap.avatarUrl)})`; av.textContent = ''; } }
+  }).catch(() => {});
+}
+async function saveAppearance() {
+  const body = {
+    avatarUrl: ($('#apAvUrl')?.value || '').trim(),
+    bgUrl: ($('#apBgUrl')?.value || '').trim(),
+    brandTitle: ($('#apTitle')?.value || '').trim(),
+    brandSub: ($('#apSub')?.value || '').trim(),
+  };
+  try {
+    await api('/api/appearance', { method: 'POST', body: JSON.stringify(body) });
+    state.appearance = { ...(state.appearance || {}), ...body };
+    applyAppearance();
+    toast('外观已保存', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+function applyAppearance() {
+  const ap = state.appearance || {};
+  // 头像：侧栏用户卡
+  const av = $('#meAv');
+  if (av) { if (ap.avatarUrl) { av.style.backgroundImage = `url(${JSON.stringify(ap.avatarUrl)})`; av.style.backgroundSize = 'cover'; av.style.backgroundPosition = 'center'; av.textContent = ''; } else { av.style.backgroundImage = 'none'; } }
+  // 品牌标题/副标题
+  if (ap.brandTitle) { const b = document.querySelector('.brand b'); if (b) b.textContent = ap.brandTitle; }
+  if (ap.brandSub) { const s = document.querySelector('.brand small'); if (s) s.textContent = ap.brandSub; }
+  // 背景：走 /__bg/（KV 出图），加时间戳避免缓存
+  if (ap.bgUrl) document.body.style.setProperty('--pan-bg-url', `url("/__bg/bg?v=${Date.now()}")`);
+  else document.body.style.removeProperty('--pan-bg-url');
 }
 async function savePw() {
   const a = $('#pwOld').value, b = $('#pwNew').value, c = $('#pwNew2').value;

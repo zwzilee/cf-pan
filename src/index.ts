@@ -335,6 +335,10 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (seg[0] === 'api' && seg[1] === 'tokens' && seg[2] && m === 'PATCH')
     return await updateTokenHandler(req, env, seg[2]);
 
+  // ================= 外观（头像 / 品牌 / 背景图 URL，存 settings + KV） =================
+  if (p === '/api/appearance' && m === 'GET') return await appearanceHandler(req, env);
+  if (p === '/api/appearance' && m === 'POST') return await appearanceSaveHandler(req, env);
+
   // ================= 管理员：TG 上传渠道 =================
   if (p === '/api/tg/config' && m === 'GET') return await tgConfigHandler(req, env);
   if (p === '/api/tg/config' && m === 'POST') return await tgSaveHandler(req, env, ctx);
@@ -388,6 +392,43 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   }
   if (env.ASSETS && !p.startsWith('/api/')) return env.ASSETS.fetch(req);
   return json({ error: 'Not Found' }, { status: 404 });
+}
+
+// ============ 外观：头像 / 品牌 / 背景 ============
+// GET 公开（前端初始化要读）；POST 需要管理员。
+async function appearanceHandler(req: Request, env: Env): Promise<Response> {
+  const avatarUrl = (await getSetting(env, 'ui_avatar_url')) || '';
+  const brandTitle = (await getSetting(env, 'ui_brand_title')) || '';
+  const brandSub = (await getSetting(env, 'ui_brand_sub')) || '';
+  const bgUrl = (await getSetting(env, 'ui_bg_url')) || '';
+  return json({ ok: true, avatarUrl, brandTitle, brandSub, bgUrl });
+}
+
+async function appearanceSaveHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  const b: any = await req.json().catch(() => ({}));
+  const set = async (k: string, v: any) => { if (v !== undefined) await setSetting(env, k, String(v).slice(0, 4096)); };
+  await set('ui_avatar_url', b.avatarUrl);
+  await set('ui_brand_title', b.brandTitle);
+  await set('ui_brand_sub', b.brandSub);
+  await set('ui_bg_url', b.bgUrl);
+  // 背景图 URL：若给了 http(s)/data: 地址，抓取并写入 KV（bg:panorama），让 /__bg/ 直接出图；
+  // 空字符串 = 清空 KV 背景，回退到默认。
+  if (b.bgUrl !== undefined) {
+    const u = String(b.bgUrl || '').trim();
+    if (!u) {
+      await env.KV.delete('bg:panorama'); await env.KV.delete('bg:panorama:ct');
+    } else if (/^data:image\//i.test(u)) {
+      const m = u.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+      if (m) { const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0)); await env.KV.put('bg:panorama', bytes); await env.KV.put('bg:panorama:ct', m[1]); }
+    } else if (/^https?:\/\//i.test(u)) {
+      try {
+        const r = await fetch(u);
+        if (r.ok) { const ab = await r.arrayBuffer(); const ct = r.headers.get('content-type') || 'image/jpeg'; await env.KV.put('bg:panorama', ab); await env.KV.put('bg:panorama:ct', ct); }
+      } catch { /* 抓取失败保留旧图 */ }
+    }
+  }
+  return json({ ok: true });
 }
 
 // ============ 认证 ============
