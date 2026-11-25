@@ -1329,8 +1329,17 @@ async function serveFile(req: Request, env: Env, file: any, opts?: { inline?: bo
   if (range) {
     const mm = /bytes=(\d*)-(\d*)/.exec(range);
     if (mm) {
-      if (mm[1]) start = parseInt(mm[1], 10);
-      if (mm[2]) end = parseInt(mm[2], 10);
+      if (mm[1]) {
+        start = parseInt(mm[1], 10);
+        if (mm[2]) end = parseInt(mm[2], 10);
+      } else if (mm[2]) {
+        // 后缀形式 bytes=-N：请求最后 N 字节（MP4 的 moov 常放在文件尾部，浏览器必须能读到这里）
+        const n = parseInt(mm[2], 10);
+        if (n > 0) {
+          start = Math.max(0, file.size - n);
+          end = file.size - 1;
+        }
+      }
       status = 206;
     }
   }
