@@ -917,12 +917,22 @@ export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean;
  */
 export async function watchdogResume(env: Env, chatId: string): Promise<void> {
   const jobs = await env.DB.prepare(
-    `SELECT id, upload_id FROM tg_jobs WHERE chat_id = ? AND phase IN ('queued','downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
+    `SELECT id, upload_id, phase, created_at, updated_at FROM tg_jobs WHERE chat_id = ? AND phase IN ('queued','downloading','uploading') ORDER BY created_at DESC LIMIT 8`,
   ).bind(chatId).all<any>();
+  const now = Date.now();
   for (const j of (jobs.results || []) as any[]) {
     const id = String(j.id);
-    // 先对账：有些 job 其实早已入库、只是没抢到 done 回写（upload 会话已消失）。
-    // 直接补成 done，避免无限空转续传把面板一直挂在「入库中」。
+    // ① queued 却迟迟没建立上传会话：多半是 webhook 探大小/建会话那步就死了。
+    //    绝不能让它永远显示「排队中」——超过 120 秒还是 queued 且无 upload_id，就直接判失败、说实话。
+    if (j.phase === 'queued' && !j.upload_id) {
+      const age = now - Date.parse(j.updated_at || j.created_at || '0');
+      if (age > 120 * 1000) {
+        await updateJob(env, id, { phase: 'failed', error: '未能建立下载会话（准备阶段超时），请重新发送该文件' }).catch(() => {});
+        continue;
+      }
+      continue; // 120 秒内还在准备，先别动，等下一条 watchdog
+    }
+    // ② 已入库但没抢到 done 回写（upload 会话已消失）：对账补 done，避免无限空转。
     if (j.upload_id) {
       const fixed = await reconcileJobDone(env, id, String(j.upload_id)).catch(() => false);
       if (fixed) continue;
