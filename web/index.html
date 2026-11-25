@@ -671,12 +671,21 @@ async function renderFiles() {
       <button class="btn sm primary" onclick="go('upload')">⬆️ 上传</button>` : ''}
   </div>`;
 
-  const items = [
-    ...subFolders.map((f) => ({ kind: 'folder', ...f })),
-    ...docs.map((d) => ({ kind: 'doc', ...d })),
-    ...sheets.map((s) => ({ kind: 'sheet', ...s })),
-    ...files.map((f) => ({ kind: 'file', ...f })),
-  ];
+  // 根目录「全部文件」= 全盘平铺：文件里已经包含各子目录的文件，
+  // 若再叠加子目录卡片，同一个文件会同时以「目录里的那一份」和「平铺的那一条」出现，看着像重复。
+  // 所以根目录只平铺文件、不列子目录卡片；要进某个目录，用左侧目录树/面包屑/搜索。
+  const items = state.folder === null
+    ? [
+        ...docs.map((d) => ({ kind: 'doc', ...d })),
+        ...sheets.map((s) => ({ kind: 'sheet', ...s })),
+        ...files.map((f) => ({ kind: 'file', ...f })),
+      ]
+    : [
+        ...subFolders.map((f) => ({ kind: 'folder', ...f })),
+        ...docs.map((d) => ({ kind: 'doc', ...d })),
+        ...sheets.map((s) => ({ kind: 'sheet', ...s })),
+        ...files.map((f) => ({ kind: 'file', ...f })),
+      ];
 
   if (state.folder !== null) {
     const parent = path[path.length - 2]?.id ?? null;
