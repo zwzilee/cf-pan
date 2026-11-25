@@ -1121,9 +1121,9 @@ async function upAggRefresh() {
       <div class="stat"><div class="k">准备中</div><div class="v">${st.queued || 0}</div></div>
       <div class="stat"><div class="k">进行中</div><div class="v">${st.active || 0}</div></div>
       <div class="stat"><div class="k">已完成</div><div class="v">${st.done || 0}<small>/ ${st.total || 0} 个</small></div>
-        <div class="bar"><i style="width:${st.total ? Math.round((st.done / st.total) * 100) : 0}%"></i></div></div>
+        <div class="bar"><i style="width:${st.total ? Math.round((st.done / st.total) * 100) : 0}%;background:linear-gradient(90deg,${lvlTier(st.total ? Math.round((st.done / st.total) * 100) : 0).c1},${lvlTier(st.total ? Math.round((st.done / st.total) * 100) : 0).c2})"></i></div></div>
       <div class="stat"><div class="k">失败</div><div class="v">${st.failed || 0}</div></div>
-      <div class="stat"><div class="k">TG 累计入库</div><div class="v">${bytes(st.bytesDone || 0)}</div></div>`;
+      <div class="stat"><div class="k">累计入库</div><div class="v">${bytes(st.bytesDone || 0)}</div></div>`;
     // TG 进行中
     const tgAgg = $('#tgAgg');
     const cnt = $('#tgAggCnt');
@@ -1132,12 +1132,14 @@ async function upAggRefresh() {
       ? active.map((j) => {
           const pct = pctOf(j);
           const q = j.phase === 'queued';
+          const tier = lvlTier(pct);
+          const rs = rateStr(j.rate_bps);
           return `<div class="dl-row" style="grid-template-columns:1fr;gap:8px">
             <div class="row" style="justify-content:space-between;gap:10px;align-items:center">
               <div class="nm" style="gap:10px"><span class="ico">${q ? '🕒' : '⬇️'}</span>
-                <div class="t"><b>${esc(j.name)}</b><small>${tgPhaseLabel(j.phase)}${q ? '' : ` · ${j.chunks_done}/${j.chunks_total} 片 · ${bytes(j.bytes_done)} / ${bytes(j.size)}`}</small></div></div>
-              <div style="font-weight:650;font-size:15px;min-width:44px;text-align:right">${q ? '准备中' : pct + '%'}</div></div>
-            <div style="height:6px;border-radius:99px;background:#0b101a;overflow:hidden"><i style="display:block;height:100%;width:${q ? 4 : pct}%;border-radius:99px;background:linear-gradient(90deg,#3f7bf0,#6ea1ff);transition:width .5s"></i></div></div>`;
+                <div class="t"><b>${esc(j.name)}</b><small>${tgPhaseLabel(j.phase)}${q ? '' : ` · ${j.chunks_done}/${j.chunks_total} 片 · ${bytes(j.bytes_done)} / ${bytes(j.size)}`}${rs ? ` · ⚡ ${rs}` : ''}</small></div></div>
+              <div style="font-weight:650;font-size:15px;min-width:44px;text-align:right;color:${q ? 'inherit' : tier.c1}">${q ? '准备中' : pct + '%'}</div></div>
+            <div style="height:8px;border-radius:99px;background:#0b101a;overflow:hidden"><i style="display:block;height:100%;width:${q ? 4 : pct}%;border-radius:99px;background:linear-gradient(90deg,${tier.c1},${tier.c2});transition:width .5s"></i></div></div>`;
         }).join('')
       : '<div class="mut" style="padding:14px 16px">当前没有进行中的任务。</div>';
     // TG 历史
@@ -2628,7 +2630,19 @@ async function tgClear() {
   try { await api('/api/tg/config', { method: 'POST', body: JSON.stringify({ clearToken: true }) }); toast('已清空', 'ok'); renderTelegram(); }
   catch (e) { toast(e.message, 'err'); }
 }
-function tgPhaseLabel(p) {
+function lvlTier(pct) {
+  if (pct >= 85) return { c1: '#ef4444', c2: '#f97316', label: '快完成' };
+  if (pct >= 60) return { c1: '#f59e0b', c2: '#fbbf24', label: '入库中' };
+  if (pct >= 30) return { c1: '#3b82f6', c2: '#60a5fa', label: '入库中' };
+  return { c1: '#22c55e', c2: '#4ade80', label: '入库中' };
+}
+function rateStr(bps) {
+  if (!bps || bps <= 0) return '';
+  const u = ['B/s','KB/s','MB/s','GB/s'];
+  let i = 0, v = bps;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + ' ' + u[i];
+}function tgPhaseLabel(p) {
   return ({ queued: '准备中', downloading: '下载中', uploading: '入库中', done: '已完成', failed: '失败' })[p] || p;
 }
 function tgPhasePill(p) {
@@ -2677,7 +2691,7 @@ function tgDrawProgress(stats, jobs) {
       <div class="stat"><div class="k">准备中</div><div class="v">${stats.queued}</div></div>
       <div class="stat"><div class="k">进行中</div><div class="v">${stats.active}</div></div>
       <div class="stat"><div class="k">已完成</div><div class="v">${stats.done}<small>/ ${stats.total} 个文件</small></div>
-        <div class="bar"><i style="width:${totalPct}%"></i></div></div>
+        <div class="bar"><i style="width:${totalPct}%;background:linear-gradient(90deg,${lvlTier(totalPct).c1},${lvlTier(totalPct).c2})"></i></div></div>
       <div class="stat"><div class="k">失败</div><div class="v">${stats.failed}</div></div>
       <div class="stat"><div class="k">累计入库</div><div class="v">${bytes(stats.bytesDone)}</div>
         <div class="k" style="margin:8px 0 0">仅统计已完成文件的实际大小</div></div>

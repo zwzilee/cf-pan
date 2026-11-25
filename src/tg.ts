@@ -190,6 +190,7 @@ export interface TgJob {
   dl_url?: string | null;
   file_base?: string | null;
   file_secret?: string | null;
+  rate_bps?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -210,7 +211,7 @@ export async function createJob(env: Env, chatId: string, name: string, size: nu
 export async function updateJob(env: Env, id: string, patch: Partial<TgJob>): Promise<void> {
   const cols: string[] = [];
   const vals: any[] = [];
-  for (const k of ['phase', 'bytes_done', 'chunks_done', 'chunks_total', 'upload_id', 'file_id', 'error', 'dl_url', 'file_base', 'file_secret'] as (keyof TgJob)[]) {
+  for (const k of ['phase', 'bytes_done', 'chunks_done', 'chunks_total', 'upload_id', 'file_id', 'error', 'dl_url', 'file_base', 'file_secret', 'rate_bps'] as (keyof TgJob)[]) {
     if (patch[k] !== undefined) { cols.push(`${k} = ?`); vals.push(patch[k]); }
   }
   cols.push('updated_at = ?'); vals.push(new Date().toISOString());
@@ -737,6 +738,22 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
     await putChunk(env, m.uploadId, i, part);
   }
 
+  // 上传速率：用最近一段字节增量 / 时间差算瞬时速率，写进 job 让面板实时展示。
+  // 以 job 上已记的 bytes_done + updated_at 作为上一采样点。
+  let rateBps = 0;
+  if (m.jobId) {
+    const jr = await env.DB.prepare('SELECT bytes_done, rate_bps, updated_at FROM tg_jobs WHERE id = ?').bind(m.jobId).first<any>().catch(() => null);
+    const prevBytes = Number(jr?.bytes_done || 0);
+    const prevAt = jr?.updated_at ? Date.parse(jr.updated_at) : 0;
+    const nowMs = Date.now();
+    const cnt0 = await env.DB.prepare('SELECT COALESCE(SUM(size),0) b FROM chunks WHERE file_id = ?').bind(m.uploadId).first<any>().catch(() => null);
+    const curBytes = Number(cnt0?.b || 0);
+    const dt = prevAt ? (nowMs - prevAt) / 1000 : 0;
+    const dB = curBytes - prevBytes;
+    if (dt > 0.2 && dB > 0) rateBps = Math.round(dB / dt);
+    else rateBps = Number(jr?.rate_bps || 0); // 太小的时间窗或不增，沿用上次速率
+  }
+
   // 进度按已落库的 chunks 数算（更准，且并发安全）
   if (m.jobId) {
     const cnt = await env.DB.prepare('SELECT COUNT(*) c, COALESCE(SUM(size),0) b FROM chunks WHERE file_id = ?')
@@ -752,7 +769,8 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
         chunks_done: doneCnt,
         bytes_done: Math.min(m.size, Number(cnt?.b || 0)),
         chunks_total: m.total,
-      }).catch(() => {});
+        rate_bps: rateBps,
+      } as any).catch(() => {});
     }
   }
 

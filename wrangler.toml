@@ -52,8 +52,12 @@ queue = "tg-upload"
 queue = "tg-upload"
 max_batch_size = 1
 max_batch_timeout = 5
-max_concurrency = 2
+# 批量上传时并发跑多个文件，别让后面的任务在前面的消息上排队等死
+max_concurrency = 10
+# 免费计划单次调用有 subrequest/时间上限，失败后快速重试，不要长时间卡住整个队列
 max_retries = 5
+# 单条消息最多重投 2 次（重试后仍失败直接抛弃，由 watchdog 兜底），避免一条坏消息长期霸占
+retry_delay = 10
 
 # 瀹氭椂娓呯悊璁块棶鏃ュ織锛氭瘡 15 澶╀竴娆★紙姣忔湀 1 鏃ュ拰 16 鏃?04:00 UTC锛?
 [triggers]
