@@ -684,6 +684,37 @@ export async function markCacheForSweep(env: Env, filePath: string | undefined |
 }
 
 /**
+ * 对账收尾：当一个 job 还停在 uploading/downloading，但它的 upload 会话已经消失
+ * （被某个并发批次 complete 掉了），说明文件其实已经入库 —— 但我们这一路没抢到末批的回写，
+ * 于是 job 永远挂在 uploading。这里按 upload_id 去 files 表找对应成品，找到就把 job 标 done。
+ * 找不到对应成品则什么都不做（交给正常流程/watchdog）。
+ * 返回 true 表示已对账收尾。
+ */
+async function reconcileJobDone(env: Env, jobId: string, uploadId: string): Promise<boolean> {
+  if (!jobId) return false;
+  // upload 会话还在 → 说明没完成，别乱标
+  const sess = await env.DB.prepare('SELECT id FROM uploads WHERE id = ?').bind(uploadId).first<any>();
+  if (sess) return false;
+  const job = await env.DB.prepare('SELECT * FROM tg_jobs WHERE id = ?').bind(jobId).first<any>();
+  if (!job || job.phase === 'done') return false;
+  // 找对应成品：优先 chunks 表里已改指到的 file_id；否则按 名称+大小+目录 最新 ready 文件兜底
+  let fileId = '';
+  const byChunk = await env.DB.prepare(
+    'SELECT file_id FROM chunks WHERE file_id IN (SELECT id FROM files WHERE name = ? AND size = ? AND status = ?) LIMIT 1',
+  ).bind(job.name, job.size, 'ready').first<any>().catch(() => null);
+  if (byChunk?.file_id) fileId = String(byChunk.file_id);
+  if (!fileId) {
+    const f = await env.DB.prepare(
+      "SELECT id FROM files WHERE name = ? AND size = ? AND status = 'ready' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+    ).bind(job.name, job.size).first<any>().catch(() => null);
+    if (f?.id) fileId = String(f.id);
+  }
+  if (!fileId) return false;
+  await updateJob(env, jobId, { phase: 'done', chunks_done: job.chunks_total || 0, bytes_done: job.size || 0, file_id: fileId, error: null }).catch(() => {});
+  return true;
+}
+
+/**
  * 处理一批分片（跨多次 Queue 消息，绕开免费计划单次 50 subrequest 上限）。
  * 每批下载 [from,to] 片并 putChunk；更新进度；isLast 时 completeUpload + 回执。
  */
@@ -692,9 +723,10 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
   const baseHeaders: Record<string, string> = {};
   if (m.fileBase && m.fileSecret) baseHeaders['X-Tgfile-Secret'] = m.fileSecret;
 
-  // 会话已被别的批次完成/清掉 → 这一批是重复投递，直接跳过（避免退出码噪音）
+  // 会话已被别的批次完成/清掉 → 这一批是重复投递。先对账：如果文件其实已入库，把 job 补齐成 done，
+  // 否则直接跳过（避免退出码噪音）。
   const sess = await env.DB.prepare('SELECT id FROM uploads WHERE id = ?').bind(m.uploadId).first<any>();
-  if (!sess) return;
+  if (!sess) { await reconcileJobDone(env, m.jobId || '', m.uploadId).catch(() => {}); return; }
 
   for (let i = m.from; i <= m.to; i++) {
     const s = i * m.chunkSize;
@@ -710,12 +742,18 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
     const cnt = await env.DB.prepare('SELECT COUNT(*) c, COALESCE(SUM(size),0) b FROM chunks WHERE file_id = ?')
       .bind(m.uploadId)
       .first<any>();
-    await updateJob(env, m.jobId, {
-      phase: 'uploading',
-      chunks_done: Number(cnt?.c || 0),
-      bytes_done: Math.min(m.size, Number(cnt?.b || 0)),
-      chunks_total: m.total,
-    }).catch(() => {});
+    const doneCnt = Number(cnt?.c || 0);
+    // 会话已被完成清掉时，chunks 表已改指到成品 file_id，COUNT 会变 0 —— 别把进度打回 0，
+    // 也别把已 done 的 job 覆盖回 uploading。
+    const stillSess = await env.DB.prepare('SELECT id FROM uploads WHERE id = ?').bind(m.uploadId).first<any>().catch(() => null);
+    if (stillSess) {
+      await updateJob(env, m.jobId, {
+        phase: 'uploading',
+        chunks_done: doneCnt,
+        bytes_done: Math.min(m.size, Number(cnt?.b || 0)),
+        chunks_total: m.total,
+      }).catch(() => {});
+    }
   }
 
   if (!m.isLast) return;
@@ -754,12 +792,18 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
     const claim = await env.DB.prepare(
       `UPDATE tg_jobs SET phase='completing', updated_at=? WHERE id=? AND phase IN ('downloading','uploading')`,
     ).bind(new Date().toISOString(), m.jobId).run();
-    if (!claim.meta.changes) return; // 已被别的批次抢先完成/正在完成
+    if (!claim.meta.changes) {
+      // 已被别的批次抢先完成/正在完成。若它已把 upload 完成掉，对账把本 job 补齐成 done。
+      await reconcileJobDone(env, m.jobId, m.uploadId).catch(() => {});
+      return;
+    }
   }
   try {
     done = await completeUpload(env, m.uploadId);
   } catch (e: any) {
-    if (m.jobId) await updateJob(env, m.jobId, { phase: 'done' }).catch(() => {}); // 会话已被并发批次完成
+    // 会话已被并发批次完成 → 对账补 done（而不是无脑标 done 丢 file_id）
+    const fixed = m.jobId ? await reconcileJobDone(env, m.jobId, m.uploadId).catch(() => false) : false;
+    if (m.jobId && !fixed) await updateJob(env, m.jobId, { phase: 'done' }).catch(() => {});
     return;
   }
   if (m.jobId) await updateJob(env, m.jobId, { phase: 'done', chunks_done: m.total, bytes_done: m.size, file_id: done.fileId }).catch(() => {});
@@ -873,10 +917,17 @@ export async function resumeJob(env: Env, jobId: string): Promise<{ ok: boolean;
  */
 export async function watchdogResume(env: Env, chatId: string): Promise<void> {
   const jobs = await env.DB.prepare(
-    `SELECT id FROM tg_jobs WHERE chat_id = ? AND phase IN ('queued','downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
+    `SELECT id, upload_id FROM tg_jobs WHERE chat_id = ? AND phase IN ('queued','downloading','uploading') ORDER BY created_at DESC LIMIT 5`,
   ).bind(chatId).all<any>();
   for (const j of (jobs.results || []) as any[]) {
-    await resumeJob(env, String(j.id)).catch(() => {});
+    const id = String(j.id);
+    // 先对账：有些 job 其实早已入库、只是没抢到 done 回写（upload 会话已消失）。
+    // 直接补成 done，避免无限空转续传把面板一直挂在「入库中」。
+    if (j.upload_id) {
+      const fixed = await reconcileJobDone(env, id, String(j.upload_id)).catch(() => false);
+      if (fixed) continue;
+    }
+    await resumeJob(env, id).catch(() => {});
   }
 }
 
