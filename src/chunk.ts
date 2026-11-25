@@ -228,7 +228,7 @@ export function planRanges(chunks: ChunkRow[], start: number, end: number): Plan
  * 50 个外部子请求（每个分片 GET 算 1 个），付费版默认 10000 可调。
  * 超了就前端按 Range 分段续拉（见 web/index.html 的 downloadFile）。
  */
-export const MAX_PARTS_PER_REQUEST = 50;
+export const MAX_PARTS_PER_REQUEST = 400;
 
 /** 给定 start，返回本次请求最多能覆盖到哪个字节（含），用于服务端夹断 */
 export function maxEndForRequest(chunks: ChunkRow[], start: number, maxParts = MAX_PARTS_PER_REQUEST): number {
@@ -245,32 +245,74 @@ export function maxEndForRequest(chunks: ChunkRow[], start: number, maxParts = M
   return off - 1;
 }
 
-/** 把多账号上的分片拼成一条流；Range 请求只回必要的几段 */
+/**
+ * 单条流同时挂多少个 R2 分片 GET。串行取片会让播放器「等一片、拿一片」，
+ * 25MB 分片 × 网络延迟 = 必然黑屏卡顿；这里用滑动窗口并发预取，
+ * 但按分片顺序冲刷，保证字节连续。
+ */
+export const STREAM_PREFETCH = 6;
+
+/** 把多账号上的分片拼成一条流；Range 请求只回必要的几段（滑动窗口并发取片） */
 export async function streamDownload(env: Env, fileId: string, start: number, end: number, preloaded?: ChunkRow[]): Promise<ReadableStream> {
   const chunks = preloaded ?? (await getChunks(env, fileId));
   const accounts = await store.listAccounts(env);
   const byId = new Map<number, Account>(accounts.map((a) => [a.id, a]));
   const parts = planRanges(chunks, start, end);
 
-  let i = 0;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (i >= parts.length) {
-        controller.close();
-        return;
-      }
-      const part = parts[i++];
-      const acct = byId.get(part.chunk.account_id);
-      if (!acct) {
-        controller.error(new Error(`分片 #${part.chunk.idx} 所在账号已删除`));
-        return;
-      }
+  const inflight: Promise<Uint8Array>[] = [];
+  let next = 0;
+  let failed = false;
+
+  // 把一个分片 GET 包成带重试的 promise。R2 的 S3 端点在大 Range 上偶发
+  // ECONNRESET —— 播放器读 MP4 尾部 moov 时只要断一次就整条 SourceBuffer 报废，
+  // 表现为黑屏、readyState 归零、error=4，所以这里必须重试而不是直接抛。
+  const fetchPart = async (part: PlannedPart, acct: Account): Promise<Uint8Array> => {
+    let lastErr: unknown = null;
+    for (let attempt = 1; attempt <= 4; attempt++) {
       try {
         const res = await s3.s3Get(acct, part.chunk.object_key, [part.localStart, part.localEnd]);
-        controller.enqueue(new Uint8Array(await res.arrayBuffer()));
+        return new Uint8Array(await res.arrayBuffer());
       } catch (e) {
+        lastErr = e;
+        if (attempt < 4) await new Promise((r) => setTimeout(r, attempt * 220));
+      }
+    }
+    throw new Error(`分片 #${part.chunk.idx} 读取失败：${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+  };
+
+  const startOne = (): void => {
+    const part = parts[next++];
+    const acct = byId.get(part.chunk.account_id);
+    if (!acct) {
+      inflight.push(Promise.reject(new Error(`分片 #${part.chunk.idx} 所在账号已删除`)));
+      return;
+    }
+    inflight.push(fetchPart(part, acct));
+  };
+
+  const fill = (): void => {
+    while (!failed && next < parts.length && inflight.length < STREAM_PREFETCH) startOne();
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        fill();
+        if (!inflight.length) {
+          controller.close();
+          return;
+        }
+        const head = inflight.shift()!;
+        const buf = await head;
+        controller.enqueue(buf);
+        fill();
+      } catch (e) {
+        failed = true;
         controller.error(e);
       }
+    },
+    cancel() {
+      failed = true;
     },
   });
 }
