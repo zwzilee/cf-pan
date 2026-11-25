@@ -729,7 +729,49 @@ export async function processChunkBatch(env: Env, m: TgChunkBatchMsg): Promise<v
   const sess = await env.DB.prepare('SELECT id FROM uploads WHERE id = ?').bind(m.uploadId).first<any>();
   if (!sess) { await reconcileJobDone(env, m.jobId || '', m.uploadId).catch(() => {}); return; }
 
+  // 幂等跳过：会话还在但所有片都已落库、且本 job 没在收尾 → 直接补一次完成，
+  // 不再重新下载（否则批量时先到的批次把所有片传完，末批因「重复投递丢失」而永远不 complete，
+  // job 就卡在 uploading 55/55）。
+  if (m.jobId && !m.isLast && m.total) {
+    const allCnt = await env.DB.prepare('SELECT COUNT(*) c, COALESCE(SUM(size),0) b FROM chunks WHERE file_id = ?').bind(m.uploadId).first<any>().catch(() => null);
+    const haveN = Number(allCnt?.c || 0);
+    const haveBytes = Number(allCnt?.b || 0);
+    const jobNow = await env.DB.prepare('SELECT phase, size FROM tg_jobs WHERE id = ?').bind(m.jobId).first<any>().catch(() => null);
+    if (haveN >= m.total && haveBytes >= (jobNow?.size || m.size) && jobNow && jobNow.phase !== 'done' && jobNow.phase !== 'completing') {
+      const claimA = await env.DB.prepare(
+        `UPDATE tg_jobs SET phase='completing', updated_at=? WHERE id=? AND phase IN ('downloading','uploading')`,
+      ).bind(new Date().toISOString(), m.jobId).run().catch(() => null);
+      if (claimA && claimA.meta.changes) {
+        let fin: { fileId: string } | null = null;
+        try { fin = await completeUpload(env, m.uploadId); } catch (e: any) { /* 可能被并发完成 */ }
+        if (fin) {
+          await updateJob(env, m.jobId, { phase: 'done', chunks_done: m.total, bytes_done: m.size, file_id: fin.fileId }).catch(() => {});
+          await env.DB.prepare(`UPDATE tg_jobs SET phase='done', chunks_done=?, bytes_done=?, file_id=?, updated_at=? WHERE upload_id=? AND id<>? AND phase<>'done'`)
+            .bind(m.total, m.size, fin.fileId, new Date().toISOString(), m.uploadId, m.jobId).run().catch(() => {});
+          await setSetting(env, 'tg_last_at', new Date().toISOString());
+          await tgApi(cfg.botToken, 'sendMessage', {
+            chat_id: m.chatId,
+            text: `✅ 已存入网盘：${m.name}（${fmtBytes(m.size)}）\n目录：${m.chatId}（目录 #${m.folderId == null ? 'root' : m.folderId}）`,
+          }, cfg.apiBase).catch(() => {});
+          await cleanupTgCache(env, (m as any).filePath).catch(() => {});
+          await markCacheForSweep(env, (m as any).filePath, m.name).catch(() => {});
+        } else {
+          await reconcileJobDone(env, m.jobId, m.uploadId).catch(() => {});
+        }
+        return;
+      }
+      // 已被别的批次抢去收尾
+      await reconcileJobDone(env, m.jobId, m.uploadId).catch(() => {});
+      return;
+    }
+  }
+
+  // 已落库的片跳过，只下缺失的（批量并发时前面批次可能已把片传完，避免重复下载与子请求浪费）
+  const haveRows = await env.DB.prepare('SELECT idx FROM chunks WHERE file_id = ?').bind(m.uploadId).all<any>().catch(() => null);
+  const haveSet = new Set<number>(((haveRows?.results || []) as any[]).map((r) => Number(r.idx)));
+
   for (let i = m.from; i <= m.to; i++) {
+    if (haveSet.has(i)) continue;
     const s = i * m.chunkSize;
     const e = Math.min(m.size, s + m.chunkSize) - 1;
     const r = await fetch(m.dlUrl, { headers: { ...baseHeaders, Range: `bytes=${s}-${e}` } });
