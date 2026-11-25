@@ -841,6 +841,13 @@ async function deleteFolder(req: Request, env: Env, id: number): Promise<Respons
 async function listFiles(req: Request, env: Env): Promise<Response> {
   await requireAny(req, env);
   const f = new URL(req.url).searchParams.get('folder');
+  // folder=all 表示「全盘」：跨所有目录把文件平铺出来，供根目录「全部文件」视图用
+  if (f === 'all') {
+    const { results } = await env.DB.prepare(
+      "SELECT id,name,size,chunk_size,chunks_count,folder_id,created_at,enc,enc_meta FROM files WHERE status='ready' AND deleted_at IS NULL ORDER BY created_at DESC",
+    ).all();
+    return json({ files: results, folderId: 'all' });
+  }
   const folderId = f === null || f === '' || f === 'root' ? null : Number(f);
   const sql =
     folderId === null
@@ -949,7 +956,13 @@ async function createShareHandler(req: Request, env: Env, fileId: string): Promi
   if (!file) throw new HttpError(404, '文件不存在');
 
   const b = (await req.json().catch(() => ({}))) as any;
-  const ttlSec = Math.min(Math.max(Number(b.ttlSec) || 7 * 86400, 60), 365 * 86400);
+  const rawTtl = Number(b.ttlSec);
+  // ttlSec 为 0 / 缺省 / 非正数时：缺省按 7 天，显式 0 视为永久（10 年）
+  const PERMANENT = 10 * 365 * 86400;
+  let ttlSec: number;
+  if (b.ttlSec === 0) ttlSec = PERMANENT;
+  else if (!Number.isFinite(rawTtl) || rawTtl <= 0) ttlSec = 7 * 86400;
+  else ttlSec = Math.min(Math.max(rawTtl, 60), 3650 * 86400);
   const maxDownloads = b.maxDownloads ? Number(b.maxDownloads) : undefined;
   const code = b.code ? String(b.code).trim().slice(0, 16) : undefined;
 
@@ -1006,8 +1019,10 @@ async function updateShareHandler(req: Request, env: Env, jti: string): Promise<
     dailyBytes: b.dailyBytes === undefined ? undefined : Number(b.dailyBytes),
     note: b.note === undefined ? undefined : String(b.note),
     maxDownloads: b.maxDownloads === undefined ? undefined : Number(b.maxDownloads),
+    // 有效期：0 / null = 永久；>0 = 从此刻起 N 秒。只有显式传了才改。
+    ttlSec: b.ttlSec === undefined ? undefined : b.ttlSec === null ? null : Number(b.ttlSec),
   });
-  return json({ ok: true, code: rec.code || '', dayMax: rec.dayMax || 0, byteMax: rec.byteMax || 0, note: rec.note || '' });
+  return json({ ok: true, code: rec.code || '', dayMax: rec.dayMax || 0, byteMax: rec.byteMax || 0, note: rec.note || '', exp: rec.exp || 0 });
 }
 
 async function revokeShareHandler(req: Request, env: Env, jti: string): Promise<Response> {

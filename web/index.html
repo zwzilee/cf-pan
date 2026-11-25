@@ -183,6 +183,10 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(8,11,17
 .dl-row .nm .t{min-width:0}
 .dl-row .nm .t b{display:block;font-weight:500;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dl-row .nm .t small{color:var(--mut2);font-size:11.5px}
+.tier-row{display:flex;flex-wrap:wrap;gap:8px}
+.tier-row .tier{padding:7px 16px;border-radius:9px;font-size:13px;line-height:1;border:1px solid var(--line2);background:rgba(18,24,38,.35);color:var(--mut);cursor:pointer;transition:.15s}
+.tier-row .tier:hover{border-color:var(--acc);color:#fff}
+.tier-row .tier.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
 .dl-row .acts{display:flex;gap:6px;opacity:.55;transition:.15s}
 .dl-row:hover .acts{opacity:1}
 table.tb{width:100%;border-collapse:collapse;font-size:13px}
@@ -635,7 +639,8 @@ async function refreshStorage() {
 
 /* ---------- 文件 ---------- */
 async function renderFiles() {
-  const q = state.folder === null ? '' : `?folder=${state.folder}`;
+  // 根目录「全部文件」= 全盘所有文件平铺（folder=all），子目录才是当前目录的文件
+  const q = state.folder === null ? '?folder=all' : `?folder=${state.folder}`;
   const [{ files }, tree, st] = await Promise.all([api('/api/files' + q), api('/api/tree'), api('/api/stats')]);
   const { sheets } = await api('/api/sheets' + q);
   const { docs } = await api('/api/docs' + q);
@@ -952,16 +957,20 @@ async function delFile(id) {
   try { await api(`/api/files/${id}`, { method: 'DELETE' }); toast('已删除', 'ok'); go('files'); }
   catch (e) { toast(e.message, 'err'); }
 }
-/* 分享设置对话框：有效期 / 次数 / 提取码 / 每日次数 / 每日流量 */
+/* 分享设置对话框：有效期档位（7/15/30/90/永久） / 次数 / 提取码 / 每日次数 / 每日流量 */
 function shareOptsDlg(cur = {}) {
   return new Promise((resolve) => {
     const mask = document.createElement('div');
+    // cur.days: number = 天数；null/0 = 永久
+    const isPerm = cur.days === null || cur.days === 0;
+    const TIERS = [{ v: 7, t: '7 天' }, { v: 15, t: '15 天' }, { v: 30, t: '30 天' }, { v: 90, t: '90 天' }, { v: 0, t: '永久' }];
     mask.className = 'mask';
     mask.innerHTML = `<div class="dlg" style="max-width:460px">
       <h3>分享设置</h3>
       <p class="mut" style="margin:0 0 12px">留空就是不限制</p>
       <div class="sgrid">
-        <label>有效期（天）</label><input class="input" id="sdDays" type="number" min="1" max="365" value="${cur.days || 7}">
+        <label>有效期</label>
+        <div class="tier-row" id="sdTiers">${TIERS.map((x) => `<button type="button" class="btn sm tier${(isPerm ? x.v === 0 : x.v === (cur.days || 7)) ? ' on' : ''}" data-v="${x.v}">${x.t}</button>`).join('')}</div>
         <label>最多下载次数</label><input class="input" id="sdMax" type="number" min="1" placeholder="不限" value="${cur.max || ''}">
         <label>提取码</label><input class="input" id="sdCode" maxlength="16" placeholder="不填则不需要" value="${esc(cur.code || '')}">
         <label>每天最多次数</label><input class="input" id="sdDayMax" type="number" min="1" placeholder="不限" value="${cur.dayMax || ''}">
@@ -970,17 +979,25 @@ function shareOptsDlg(cur = {}) {
       <div class="foot"><button class="btn" id="sdNo">取消</button><button class="btn primary" id="sdYes">确定</button></div>
     </div>`;
     document.body.appendChild(mask);
+    let selDays = isPerm ? 0 : (cur.days || 7);
+    const tiers = mask.querySelector('#sdTiers');
+    tiers.querySelectorAll('.tier').forEach((b) => {
+      b.onclick = () => {
+        tiers.querySelectorAll('.tier').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        selDays = Number(b.dataset.v);
+      };
+    });
     const close = (v) => { mask.remove(); resolve(v); };
     mask.querySelector('#sdNo').onclick = () => close(null);
     mask.onclick = (e) => { if (e.target === mask) close(null); };
     mask.querySelector('#sdYes').onclick = () => close({
-      days: Math.max(1, Math.min(365, Number(mask.querySelector('#sdDays').value) || 7)),
+      days: selDays,            // 0 = 永久
       max: Number(mask.querySelector('#sdMax').value) || 0,
       code: mask.querySelector('#sdCode').value.trim(),
       dayMax: Number(mask.querySelector('#sdDayMax').value) || 0,
       dayMB: Number(mask.querySelector('#sdDayMB').value) || 0,
     });
-    setTimeout(() => mask.querySelector('#sdDays').focus(), 30);
   });
 }
 
@@ -988,10 +1005,10 @@ async function shareFile(id) {
   const o = await shareOptsDlg({});
   if (!o) return;
   try {
-    const r = await api(`/api/files/${id}/share`, {
-      method: 'POST',
-      body: JSON.stringify({ ttlSec: o.days * 86400, maxDownloads: o.max || undefined, code: o.code || undefined, dailyMax: o.dayMax || 0, dailyBytes: (o.dayMB || 0) * 1048576 }),
-    });
+    const body = { maxDownloads: o.max || undefined, code: o.code || undefined, dailyMax: o.dayMax || 0, dailyBytes: (o.dayMB || 0) * 1048576 };
+    // days 0 = 永久：后端 ttlSec 传 0，不会加 exp
+    if (o.days > 0) body.ttlSec = o.days * 86400;
+    const r = await api(`/api/files/${id}/share`, { method: 'POST', body: JSON.stringify(body) });
     const url = location.origin + r.url;
     await navigator.clipboard.writeText(url).catch(() => {});
     toast(r.code ? `链接已复制，提取码 ${r.code}` : '分享链接已复制：' + url, 'ok');
@@ -1001,15 +1018,13 @@ async function shareFile(id) {
 async function shareEdit(jti) {
   const cur = state.shares.find((s) => s.jti === jti) || {};
   const o = await shareOptsDlg({
-    days: cur.expiresAt ? Math.max(1, Math.round((new Date(cur.expiresAt) - Date.now()) / 86400000)) : 7,
+    days: cur.expiresAt ? Math.max(1, Math.round((new Date(cur.expiresAt) - Date.now()) / 86400000)) : 0,
     max: cur.max, code: cur.code, dayMax: cur.dayMax, dayMB: cur.byteMax ? Math.round(cur.byteMax / 1048576) : 0,
   });
   if (!o) return;
   try {
-    await api('/api/shares/' + jti, {
-      method: 'PATCH',
-      body: JSON.stringify({ code: o.code, maxDownloads: o.max, dailyMax: o.dayMax, dailyBytes: o.dayMB * 1048576 }),
-    });
+    const body = { code: o.code, maxDownloads: o.max, dailyMax: o.dayMax, dailyBytes: o.dayMB * 1048576, ttlSec: o.days > 0 ? o.days * 86400 : null };
+    await api('/api/shares/' + jti, { method: 'PATCH', body: JSON.stringify(body) });
     toast('已更新', 'ok'); renderShares();
   } catch (e) { toast(e.message, 'err'); }
 }

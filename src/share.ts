@@ -177,7 +177,7 @@ export async function checkShareUsable(
     rec.dayBytes = (rec.dayBytes || 0) + bytes;
     const left = claims.e - Math.floor(Date.now() / 1000);
     await env.KV.put('share:' + claims.j, JSON.stringify(rec), {
-      expirationTtl: Math.max(60, left),
+      expirationTtl: left > 0 ? Math.max(60, left) : 315360000,
     });
   }
   return rec;
@@ -194,7 +194,7 @@ export async function revokeShare(env: Env, jti: string): Promise<boolean> {
 export async function updateShare(
   env: Env,
   jti: string,
-  patch: { code?: string | null; dailyMax?: number; dailyBytes?: number; note?: string; maxDownloads?: number },
+  patch: { code?: string | null; dailyMax?: number; dailyBytes?: number; note?: string; maxDownloads?: number; ttlSec?: number | null },
 ): Promise<ShareRecord> {
   const raw = await env.KV.get('share:' + jti);
   if (!raw) throw new HttpError(404, '分享不存在或已过期');
@@ -204,7 +204,11 @@ export async function updateShare(
   if (patch.dailyBytes !== undefined) rec.byteMax = Math.max(0, Math.floor(patch.dailyBytes));
   if (patch.note !== undefined) rec.note = String(patch.note).slice(0, 60);
   if (patch.maxDownloads !== undefined) rec.max = Math.max(0, Math.floor(patch.maxDownloads));
-  const left = Number(rec.exp || 0) - Math.floor(Date.now() / 1000);
-  await env.KV.put('share:' + jti, JSON.stringify(rec), { expirationTtl: Math.max(60, left) });
+  // 有效期：null/0 = 永久；其它按秒数从现在起重新计算 exp
+  if (patch.ttlSec !== undefined) {
+    rec.exp = patch.ttlSec && patch.ttlSec > 0 ? Math.floor(Date.now() / 1000) + Math.floor(patch.ttlSec) : 0;
+  }
+  const left = Number(rec.exp || 0) > 0 ? Number(rec.exp) - Math.floor(Date.now() / 1000) : 0;
+  await env.KV.put('share:' + jti, JSON.stringify(rec), { expirationTtl: left > 0 ? Math.max(60, left) : 315360000 });
   return rec;
 }
