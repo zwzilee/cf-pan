@@ -639,8 +639,9 @@ async function refreshStorage() {
 
 /* ---------- 文件 ---------- */
 async function renderFiles() {
-  // 根目录「全部文件」= 全盘所有文件平铺（folder=all），子目录才是当前目录的文件
-  const q = state.folder === null ? '?folder=all' : `?folder=${state.folder}`;
+  // 根目录只列「直属根目录」的文件（folder=all 会平铺全盘，和子目录卡片重复），
+  // 子目录照常以卡片展示，上传也可选目标目录。
+  const q = state.folder === null ? '' : `?folder=${state.folder}`;
   const [{ files }, tree, st] = await Promise.all([api('/api/files' + q), api('/api/tree'), api('/api/stats')]);
   const { sheets } = await api('/api/sheets' + q);
   const { docs } = await api('/api/docs' + q);
@@ -671,21 +672,13 @@ async function renderFiles() {
       <button class="btn sm primary" onclick="go('upload')">⬆️ 上传</button>` : ''}
   </div>`;
 
-  // 根目录「全部文件」= 全盘平铺：文件里已经包含各子目录的文件，
-  // 若再叠加子目录卡片，同一个文件会同时以「目录里的那一份」和「平铺的那一条」出现，看着像重复。
-  // 所以根目录只平铺文件、不列子目录卡片；要进某个目录，用左侧目录树/面包屑/搜索。
-  const items = state.folder === null
-    ? [
-        ...docs.map((d) => ({ kind: 'doc', ...d })),
-        ...sheets.map((s) => ({ kind: 'sheet', ...s })),
-        ...files.map((f) => ({ kind: 'file', ...f })),
-      ]
-    : [
-        ...subFolders.map((f) => ({ kind: 'folder', ...f })),
-        ...docs.map((d) => ({ kind: 'doc', ...d })),
-        ...sheets.map((s) => ({ kind: 'sheet', ...s })),
-        ...files.map((f) => ({ kind: 'file', ...f })),
-      ];
+  // 根目录：子目录卡片 + 直属根目录的文件；子目录内：子目录卡片 + 该目录文件。
+  const items = [
+    ...subFolders.map((f) => ({ kind: 'folder', ...f })),
+    ...docs.map((d) => ({ kind: 'doc', ...d })),
+    ...sheets.map((s) => ({ kind: 'sheet', ...s })),
+    ...files.map((f) => ({ kind: 'file', ...f })),
+  ];
 
   if (state.folder !== null) {
     const parent = path[path.length - 2]?.id ?? null;
