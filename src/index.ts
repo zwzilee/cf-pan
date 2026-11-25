@@ -315,6 +315,8 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
 
   // ================= 管理员：分享列表 =================
   if (p === '/api/shares' && m === 'GET') return await listSharesHandler(req, env);
+  if (seg[0] === 'api' && seg[1] === 'shares' && seg[2] && m === 'PATCH')
+    return await updateShareHandler(req, env, seg[2]);
   if (seg[0] === 'api' && seg[1] === 'shares' && seg[2] && m === 'DELETE')
     return await revokeShareHandler(req, env, seg[2]);
 
@@ -768,14 +770,42 @@ async function treeHandler(req: Request, env: Env): Promise<Response> {
   const byFolder = new Map<number | null, { n: number; bytes: number }>();
   for (const a of agg) byFolder.set(a.folder_id, { n: a.n, bytes: a.bytes });
 
-  const nodes = folders.map((f) => ({
-    id: f.id,
-    parent_id: f.parent_id,
-    name: f.name,
-    enc_salt: f.enc_salt ?? null,
-    files: byFolder.get(f.id)?.n ?? 0,
-    bytes: byFolder.get(f.id)?.bytes ?? 0,
-  }));
+  // 文件夹自身计数 = 直接文件 + 所有子孙目录里的文件（递归下卷），
+  // 否则像「TG 上传」这种只当中转父目录的节点会一直显示 0 个文件。
+  const childrenOf = new Map<number | null, number[]>();
+  for (const f of folders) {
+    const p = f.parent_id ?? null;
+    if (!childrenOf.has(p)) childrenOf.set(p, []);
+    childrenOf.get(p)!.push(f.id);
+  }
+  const rollupCache = new Map<number, { n: number; bytes: number }>();
+  const rollup = (id: number): { n: number; bytes: number } => {
+    const cached = rollupCache.get(id);
+    if (cached) return cached;
+    const own = byFolder.get(id) ?? { n: 0, bytes: 0 };
+    let n = own.n;
+    let bytes = own.bytes;
+    for (const c of childrenOf.get(id) || []) {
+      const r = rollup(c);
+      n += r.n;
+      bytes += r.bytes;
+    }
+    const res = { n, bytes };
+    rollupCache.set(id, res);
+    return res;
+  };
+
+  const nodes = folders.map((f) => {
+    const r = rollup(f.id);
+    return {
+      id: f.id,
+      parent_id: f.parent_id,
+      name: f.name,
+      enc_salt: f.enc_salt ?? null,
+      files: r.n,
+      bytes: r.bytes,
+    };
+  });
   const root = byFolder.get(null) ?? { n: 0, bytes: 0 };
   return json({ folders: nodes, root: { files: root.n, bytes: root.bytes } });
 }

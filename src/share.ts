@@ -199,10 +199,16 @@ export async function updateShare(
   const raw = await env.KV.get('share:' + jti);
   if (!raw) throw new HttpError(404, '分享不存在或已过期');
   const rec = JSON.parse(raw) as ShareRecord;
-  if (patch.code !== undefined) rec.code = patch.code ? String(patch.code).slice(0, 16) : undefined;
+  if (patch.code !== undefined) {
+    const c = patch.code ? String(patch.code).trim().slice(0, 16) : '';
+    if (c) rec.code = c; else delete rec.code;
+  }
   if (patch.dailyMax !== undefined) rec.dayMax = Math.max(0, Math.floor(patch.dailyMax));
   if (patch.dailyBytes !== undefined) rec.byteMax = Math.max(0, Math.floor(patch.dailyBytes));
-  if (patch.note !== undefined) rec.note = String(patch.note).slice(0, 60);
+  if (patch.note !== undefined) {
+    const n = String(patch.note).trim().slice(0, 60);
+    if (n) rec.note = n; else delete rec.note;
+  }
   if (patch.maxDownloads !== undefined) rec.max = Math.max(0, Math.floor(patch.maxDownloads));
   // 有效期：null/0 = 永久；其它按秒数从现在起重新计算 exp
   if (patch.ttlSec !== undefined) {
