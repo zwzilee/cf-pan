@@ -1105,7 +1105,7 @@ async function renderUpload() {
       <div id="tgAgg"><div class="mut" style="padding:14px 16px">还没有 TG 任务。</div></div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
-      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>TG 历史</b> <span class="mut">· 每个文件一条（重试/续传已合并）</span></div>
+      <div style="padding:12px 16px;border-bottom:1px solid var(--line)"><b>上传历史</b> <span class="mut">· 每个文件一条（重试/续传已合并）</span></div>
       <div id="tgHist"></div>
     </div>`;
   const drop = $('#drop');
@@ -1157,17 +1157,26 @@ async function upAggRefresh() {
             <div style="height:8px;border-radius:99px;background:#0b101a;overflow:hidden"><i style="display:block;height:100%;width:${q ? 4 : pct}%;border-radius:99px;background:linear-gradient(90deg,${tier.c1},${tier.c2});transition:width .5s"></i></div></div>`;
         }).join('')
       : '<div class="mut" style="padding:14px 16px">当前没有进行中的任务。</div>';
-    // TG 历史
+    // 上传历史（TG 入库 + 面板直传 合并，每文件一条，带来源）
     const hist = $('#tgHist');
     if (hist) {
-      const rows = jobs.length ? jobs.map((j) => {
-        const canResume = j.phase === 'failed' && j.chunks_done < j.chunks_total;
-        const act = canResume ? `<td style="text-align:right"><button class="btn ghost sm" onclick="tgResumeJob('${j.id}',this)">续传</button></td>` : '<td></td>';
-        return `<tr><td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.name)}</td>
-          <td>${tgPhasePill(j.phase)}</td><td class="mut">${bytes(j.size)}</td>
-          <td class="mut">${j.chunks_done}/${j.chunks_total}</td><td class="mut">${when(j.updated_at || j.created_at)}</td>${act}</tr>`;
-      }).join('') : '<tr><td colspan="6" class="mut">还没有记录。给机器人发个文件就会出现。</td></tr>';
-      hist.innerHTML = `<table class="tb"><thead><tr><th>文件名</th><th>状态</th><th>大小</th><th>分片</th><th>更新时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+      let hres = null;
+      try { hres = await api('/api/upload/history'); } catch (e) {}
+      const items = (hres && hres.items) || [];
+      const srcTag = (it) => it.src === 'tg'
+        ? '<span class="pill" style="background:#1e3a5f;color:#8fc7ff">📱 TG</span>'
+        : '<span class="pill" style="background:#14532d;color:#86efac">⬆️ 面板</span>';
+      const rows = items.length ? items.map((it) => {
+        const canResume = it.src === 'tg' && it.phase === 'failed' && it.chunks_done < it.chunks_total;
+        const act = canResume ? `<td style="text-align:right"><button class="btn ghost sm" onclick="tgResumeJob('${it.id}',this)">续传</button></td>` : '<td></td>';
+        const frac = it.src === 'tg' ? `${it.chunks_done}/${it.chunks_total}` : (it.phase === 'done' ? '—' : it.phase === 'failed' ? '失败' : '上传中');
+        return `<tr><td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</td>
+          <td>${srcTag(it)}</td>
+          <td class="mut">${esc(it.folder_name || '')}</td>
+          <td>${tgPhasePill(it.phase)}</td><td class="mut">${bytes(it.size)}</td>
+          <td class="mut">${frac}</td><td class="mut">${when(it.updated_at || it.created_at)}</td>${act}</tr>`;
+      }).join('') : '<tr><td colspan="8" class="mut">还没有记录。TG 发文件或网页拖文件上来就会出现。</td></tr>';
+      hist.innerHTML = `<table class="tb"><thead><tr><th>文件名</th><th>来源</th><th>目录</th><th>状态</th><th>大小</th><th>分片/进度</th><th>更新时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
     }
   };
   await paint();

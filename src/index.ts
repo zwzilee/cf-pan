@@ -29,6 +29,7 @@ import {
   updateChannel,
   deleteChannel,
   listJobs,
+  listUploadHistory,
   jobStats,
 } from './tg';
 import {
@@ -350,6 +351,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
   if (p === '/api/tg/channels' && m === 'GET') return await tgChannelsHandler(req, env);
   if (p === '/api/tg/channels' && m === 'POST') return await tgChannelCreateHandler(req, env);
   if (p === '/api/tg/progress' && m === 'GET') return await tgProgressHandler(req, env);
+  if (p === '/api/upload/history' && m === 'GET') return await uploadHistoryHandler(req, env);
   if (p === '/api/tg/resume' && m === 'POST') {
     await requireAdmin(req, env);
     const body: any = await req.json().catch(() => ({}));
@@ -1209,6 +1211,7 @@ async function initHandler(req: Request, env: Env): Promise<Response> {
       chunkSize: b.chunkSize,
       enc: b.enc ? 1 : 0,
       encMeta: b.encMeta ? String(b.encMeta).slice(0, 400) : null,
+      src: 'panel',
     }),
   );
 }
@@ -1222,7 +1225,25 @@ async function putChunkHandler(req: Request, env: Env, uploadId: string, idx: nu
 
 async function completeHandler(req: Request, env: Env, uploadId: string): Promise<Response> {
   await requireAdmin(req, env);
-  return json(await completeUpload(env, uploadId));
+  try {
+    return json(await completeUpload(env, uploadId));
+  } catch (e: any) {
+    // 竞态兜底：会话已被并发完成 / 已被清理，但成品其实已经在盘上 → 按同名同大小找回 fileId 返回成功，
+    // 避免前端拿到 "上传会话不存在" 以为没传完（正是用户遇到的现象）。
+    const up = await env.DB.prepare('SELECT name, size FROM uploads WHERE id = ?').bind(uploadId).first<any>().catch(() => null);
+    let name = up?.name as string | undefined, size = up?.size as number | undefined;
+    if (!name) {
+      const h = await env.DB.prepare('SELECT name, size FROM upload_history WHERE upload_id = ?').bind(uploadId).first<any>().catch(() => null);
+      name = h?.name; size = h?.size;
+    }
+    if (name && size != null) {
+      const f = await env.DB.prepare(
+        "SELECT id FROM files WHERE name = ? AND size = ? AND status = 'ready' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+      ).bind(name, size).first<any>().catch(() => null);
+      if (f?.id) return json({ ok: true, fileId: String(f.id), reconciled: true });
+    }
+    throw e;
+  }
 }
 
 /** DELETE /api/upload/:id —— 放弃上传，把已传分片退掉 */
@@ -1673,6 +1694,18 @@ async function tgChannelsHandler(req: Request, env: Env): Promise<Response> {
 async function tgProgressHandler(req: Request, env: Env): Promise<Response> {
   await requireAdmin(req, env);
   return json({ ok: true, stats: await jobStats(env), jobs: await listJobs(env, 80) });
+}
+
+async function uploadHistoryHandler(req: Request, env: Env): Promise<Response> {
+  await requireAdmin(req, env);
+  const items = await listUploadHistory(env, 100);
+  // 补目录名（folder_id → 名称），前端好显示来源目录
+  const folders = await env.DB.prepare('SELECT id, name FROM folders').all<any>().catch(() => ({ results: [] }));
+  const fmap = new Map<number, string>(((folders.results || []) as any[]).map((f) => [Number(f.id), String(f.name)]));
+  for (const it of items) {
+    it.folder_name = it.src === 'tg' ? (it.chat_id ? 'TG · ' + it.chat_id : 'TG') : (it.folder_id == null ? '根目录' : (fmap.get(Number(it.folder_id)) || ('# ' + it.folder_id)));
+  }
+  return json({ ok: true, items });
 }
 
 // 服务器 cron 拉取「待清理缓存」列表（只含服务器绝对路径，已入库文件）。

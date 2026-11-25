@@ -16,17 +16,42 @@ export interface InitArgs {
 }
 
 /** 第一步：建上传会话，告诉前端要切几片 */
-export async function initUpload(env: Env, args: InitArgs & { enc?: number; encMeta?: string | null }) {
+export async function initUpload(env: Env, args: InitArgs & { enc?: number; encMeta?: string | null; src?: string | null }) {
   const cs = Math.min(Math.max(args.chunkSize || DEFAULT_CHUNK, MIN_CHUNK), MAX_CHUNK);
   const count = Math.max(1, Math.ceil(args.size / cs));
   const id = crypto.randomUUID();
+  const nowIso = nowISO();
   await env.DB.prepare(
     `INSERT INTO uploads (id, name, folder_id, size, chunk_size, chunks_count, status, created_at, enc, enc_meta)
      VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`,
   )
-    .bind(id, args.name, args.folderId ?? null, args.size, cs, count, nowISO(), args.enc ? 1 : 0, args.encMeta || null)
+    .bind(id, args.name, args.folderId ?? null, args.size, cs, count, nowIso, args.enc ? 1 : 0, args.encMeta || null)
     .run();
+  // 面板直传的来源记一条「进行中」历史；完成时由 completeUpload 翻成 done。
+  await ensureUploadHistory(env, id, args.name, args.size, args.folderId ?? null, (args.src || 'panel')).catch(() => {});
   return { uploadId: id, chunkSize: cs, chunksCount: count };
+}
+
+/** 面板/接口直传的独立历史表（与 TG 的 tg_jobs 分开，统一在「上传历史」页合并展示）。 */
+export async function ensureUploadHistory(env: Env, uploadId: string, name: string, size: number, folderId: number | null, src: string) {
+  const now = nowISO();
+  await env.DB.prepare(
+    `INSERT INTO upload_history (upload_id, name, size, folder_id, src, phase, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'uploading', ?, ?)
+     ON CONFLICT(upload_id) DO NOTHING`,
+  ).bind(uploadId, name, size, folderId, src, now, now).run();
+}
+
+export async function updateUploadHistory(env: Env, uploadId: string, patch: { phase?: string; error?: string | null; file_id?: string | null }) {
+  const cols: string[] = [];
+  const vals: any[] = [];
+  if (patch.phase !== undefined) { cols.push('phase = ?'); vals.push(patch.phase); }
+  if (patch.error !== undefined) { cols.push('error = ?'); vals.push(patch.error); }
+  if (patch.file_id !== undefined) { cols.push('file_id = ?'); vals.push(patch.file_id); }
+  if (!cols.length) return;
+  cols.push('updated_at = ?'); vals.push(nowISO());
+  vals.push(uploadId);
+  await env.DB.prepare(`UPDATE upload_history SET ${cols.join(', ')} WHERE upload_id = ?`).bind(...vals).run().catch(() => {});
 }
 
 /** sha256(内容) 的十六进制，内容寻址的主键 */
@@ -101,6 +126,20 @@ export async function putChunk(env: Env, uploadId: string, idx: number, body: Ar
 export async function abortUpload(env: Env, uploadId: string) {
   const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
   if (!up) throw new Error('上传会话不存在或已完成');
+  // ★ 竞态兜底：complete 已经把成品写进 files、却因并发/中断没删掉这条 upload 会话时，
+  //   这里绝不能当成「取消上传」把它删掉重算 —— 否则会出现「文件已在盘上、会话却挂僵尸」的两头不一致。
+  //   识别方法：同名同大小、且已 ready 的成品存在 → 只做对账收尾（删残留会话 + 补历史 done），不释放分片引用。
+  const ready = await env.DB.prepare(
+    "SELECT id FROM files WHERE name = ? AND size = ? AND status = 'ready' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+  ).bind(up.name, up.size).first<any>().catch(() => null);
+  if (ready?.id) {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(uploadId),
+      env.DB.prepare('DELETE FROM uploads WHERE id = ?').bind(uploadId),
+    ]).catch(() => {});
+    await updateUploadHistory(env, uploadId, { phase: 'done', file_id: String(ready.id), error: null }).catch(() => {});
+    return { ok: true, reconciled: true, fileId: String(ready.id) };
+  }
   const r = await releaseChunks(env, uploadId);
   await env.DB.batch([
     env.DB.prepare('DELETE FROM chunks WHERE file_id = ?').bind(uploadId),
@@ -112,7 +151,17 @@ export async function abortUpload(env: Env, uploadId: string) {
 /** 第三步：所有分片到齐后落元数据（整文件 sha256 = 各片 hash 再喂一遍） */
 export async function completeUpload(env: Env, uploadId: string) {
   const up = await env.DB.prepare('SELECT * FROM uploads WHERE id = ?').bind(uploadId).first<any>();
-  if (!up) throw new Error('上传会话不存在');
+  if (!up) {
+    // 会话已不在（并发批次已完成 / upload 被删），但成品可能已落库：按上传历史找回名/大小再核对。
+    const h = await env.DB.prepare('SELECT name, size FROM upload_history WHERE upload_id = ?').bind(uploadId).first<any>().catch(() => null);
+    if (h?.name) {
+      const f = await env.DB.prepare(
+        "SELECT id FROM files WHERE name = ? AND size = ? AND status = 'ready' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+      ).bind(h.name, h.size).first<any>().catch(() => null);
+      if (f?.id) { await updateUploadHistory(env, uploadId, { phase: 'done', file_id: String(f.id), error: null }).catch(() => {}); return { fileId: String(f.id) }; }
+    }
+    throw new Error('上传会话不存在');
+  }
 
   const { results: chunks } = await env.DB.prepare('SELECT * FROM chunks WHERE file_id = ? ORDER BY idx')
     .bind(uploadId)
@@ -138,6 +187,7 @@ export async function completeUpload(env: Env, uploadId: string) {
     env.DB.prepare('UPDATE chunks SET file_id = ? WHERE file_id = ?').bind(fileId, uploadId),
     env.DB.prepare('DELETE FROM uploads WHERE id = ?').bind(uploadId),
   ]);
+  await updateUploadHistory(env, uploadId, { phase: 'done', file_id: fileId, error: null }).catch(() => {});
   return { fileId, sha256: fileHash };
 }
 

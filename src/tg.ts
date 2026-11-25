@@ -257,6 +257,47 @@ export async function jobStats(env: Env): Promise<{ queued: number; active: numb
   };
 }
 
+/**
+ * 统一的「上传历史」：把 TG 入库的 job 与面板直传的 upload_history 合并成一张表，
+ * 每个文件一条，带来源标记（src: tg / panel）。TG 侧按 chat_id+name+size 去重取最新，
+ * 面板侧直接取 upload_history 每行（upload_id 唯一）。
+ */
+export async function listUploadHistory(env: Env, limit = 100): Promise<any[]> {
+  // TG：每文件一条
+  const tgRows = await env.DB.prepare(
+    `SELECT t.* FROM tg_jobs t
+     WHERE t.created_at = (
+       SELECT MAX(x.created_at) FROM tg_jobs x
+       WHERE x.chat_id = t.chat_id AND x.name = t.name AND x.size = t.size
+     )
+     ORDER BY t.created_at DESC LIMIT ?`,
+  ).bind(limit).all<any>().catch(() => ({ results: [] }));
+  const out: any[] = [];
+  for (const j of (tgRows.results || []) as any[]) {
+    out.push({
+      src: 'tg', id: j.id, name: j.name, size: Number(j.size || 0),
+      phase: j.phase, chunks_done: j.chunks_done, chunks_total: j.chunks_total,
+      bytes_done: j.bytes_done, error: j.error || null,
+      folder_id: null, chat_id: j.chat_id || null,
+      created_at: j.created_at, updated_at: j.updated_at,
+    });
+  }
+  // 面板直传：upload_history 每行一条（上传中/完成/失败）
+  const upRows = await env.DB.prepare(
+    'SELECT * FROM upload_history ORDER BY created_at DESC LIMIT ?',
+  ).bind(limit).all<any>().catch(() => ({ results: [] }));
+  for (const u of (upRows.results || []) as any[]) {
+    out.push({
+      src: 'panel', id: u.upload_id, name: u.name, size: Number(u.size || 0),
+      phase: u.phase, chunks_done: 0, chunks_total: 0, bytes_done: 0,
+      error: u.error || null, folder_id: u.folder_id, chat_id: null,
+      created_at: u.created_at, updated_at: u.updated_at,
+    });
+  }
+  out.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+  return out.slice(0, limit);
+}
+
 
 interface Picked {
   fileId: string;
@@ -535,7 +576,7 @@ export async function handleTgUpdate(env: Env, update: any): Promise<any> {
       if (jobId) await updateJob(env, jobId, { phase: 'downloading', size, upload_id: resumeId, chunks_done: have }).catch(() => {});
       await reply(`♻️ 检测到未完成的上传（已 ${have} 片），从断点续传…`).catch(() => {});
     } else {
-      up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize });
+      up = await initUpload(env, { name: picked.name, folderId: targetFolder, size, chunkSize, src: 'tg' });
     }
     // ★ 续传批次要带 messageId，供完成后清理 TG 本地缓存
     const total = Math.max(1, Math.ceil(size / chunkSize));
